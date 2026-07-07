@@ -42,7 +42,21 @@ class TopicDetailScreen extends StatelessWidget {
                 length:
                     '${controller.settings.length.label} · ${controller.settings.length.targetWords} слов',
                 generating: generating,
-                onGenerate: () => controller.generateFactsForTopic(topic.id),
+                onGenerate: () async {
+                  final addedCount =
+                      await controller.generateFactsForTopic(topic.id);
+                  if (!context.mounted) {
+                    return;
+                  }
+
+                  final message = controller.lastError ??
+                      (addedCount > 0
+                          ? 'Готово: факт добавлен.'
+                          : 'Backend вернул пустой ответ.');
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(SnackBar(content: Text(message)));
+                },
               ),
               if (controller.lastError != null) ...[
                 const SizedBox(height: 12),

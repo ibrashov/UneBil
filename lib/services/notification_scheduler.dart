@@ -10,6 +10,15 @@ import '../models/learning_fact.dart';
 import '../models/notification_time.dart';
 import '../models/topic.dart';
 
+class NotificationPermissionException implements Exception {
+  const NotificationPermissionException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 abstract class FactNotificationScheduler {
   Future<void> initialize();
 
@@ -18,42 +27,47 @@ abstract class FactNotificationScheduler {
     required List<Topic> topics,
     required List<LearningFact> facts,
   });
+
+  Future<void> showTestNotification({
+    required AppSettings settings,
+    required List<Topic> topics,
+    required List<LearningFact> facts,
+  });
 }
 
 class NotificationScheduler implements FactNotificationScheduler {
   NotificationScheduler({FlutterLocalNotificationsPlugin? plugin})
-      : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
+    : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   final FlutterLocalNotificationsPlugin _plugin;
   bool _initialized = false;
+  bool _requestedExactAlarmPermission = false;
 
   @override
   Future<void> initialize() async {
-    if (_initialized || kIsWeb) {
+    if (kIsWeb) {
       return;
     }
 
-    tz.initializeTimeZones();
-    try {
-      final localTimezone = await FlutterTimezone.getLocalTimezone();
-      tz.setLocalLocation(tz.getLocation(localTimezone.identifier));
-    } catch (_) {
-      tz.setLocalLocation(tz.UTC);
+    if (!_initialized) {
+      tz.initializeTimeZones();
+      try {
+        final localTimezone = await FlutterTimezone.getLocalTimezone();
+        tz.setLocalLocation(tz.getLocation(localTimezone.identifier));
+      } catch (_) {
+        tz.setLocalLocation(tz.UTC);
+      }
+
+      const settings = InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      );
+      await _plugin.initialize(settings: settings);
+
+      _initialized = true;
     }
 
-    const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    );
-    await _plugin.initialize(settings: settings);
-
-    final android = _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >();
-    await android?.requestNotificationsPermission();
-    await android?.requestExactAlarmsPermission();
-
-    _initialized = true;
+    await _ensureNotificationsAllowed(requestPermission: true);
+    await _requestExactAlarmPermissionOnce();
   }
 
   @override
@@ -67,6 +81,13 @@ class NotificationScheduler implements FactNotificationScheduler {
     }
     await initialize();
     await _plugin.cancelAllPendingNotifications();
+
+    final notificationsAllowed = await _ensureNotificationsAllowed(
+      requestPermission: true,
+    );
+    if (!notificationsAllowed) {
+      return;
+    }
 
     final enabledTopics = topics.where((topic) => topic.enabled).toList();
     if (enabledTopics.isEmpty || settings.notificationTimes.isEmpty) {
@@ -87,6 +108,35 @@ class NotificationScheduler implements FactNotificationScheduler {
         payload: topic.id,
       );
     }
+  }
+
+  @override
+  Future<void> showTestNotification({
+    required AppSettings settings,
+    required List<Topic> topics,
+    required List<LearningFact> facts,
+  }) async {
+    if (kIsWeb) {
+      return;
+    }
+    await initialize();
+
+    final notificationsAllowed = await _ensureNotificationsAllowed(
+      requestPermission: true,
+    );
+    if (!notificationsAllowed) {
+      throw const NotificationPermissionException(
+        'Уведомления запрещены для UneBil. Разреши их в настройках Android.',
+      );
+    }
+
+    await _plugin.show(
+      id: 9000,
+      title: _testTitle(settings.language),
+      body: _testBody(settings.language),
+      notificationDetails: _notificationDetails,
+      payload: 'test-notification',
+    );
   }
 
   LearningFact? _bestFactForTopic(
@@ -111,23 +161,30 @@ class NotificationScheduler implements FactNotificationScheduler {
     required String body,
     required String payload,
   }) async {
+    final scheduledDate = _nextInstanceOf(time);
+    final scheduleMode = await _androidScheduleMode();
+
     try {
       await _plugin.zonedSchedule(
         id: id,
         title: title,
         body: body,
-        scheduledDate: _nextInstanceOf(time),
+        scheduledDate: scheduledDate,
         notificationDetails: _notificationDetails,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: scheduleMode,
         matchDateTimeComponents: DateTimeComponents.time,
         payload: payload,
       );
     } catch (_) {
+      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
+        rethrow;
+      }
+
       await _plugin.zonedSchedule(
         id: id,
         title: title,
         body: body,
-        scheduledDate: _nextInstanceOf(time),
+        scheduledDate: scheduledDate,
         notificationDetails: _notificationDetails,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         matchDateTimeComponents: DateTimeComponents.time,
@@ -152,6 +209,56 @@ class NotificationScheduler implements FactNotificationScheduler {
     return scheduled;
   }
 
+  Future<bool> _ensureNotificationsAllowed({
+    required bool requestPermission,
+  }) async {
+    final android = _androidPlugin;
+    if (android == null) {
+      return true;
+    }
+
+    if (requestPermission) {
+      final granted = await android.requestNotificationsPermission();
+      if (granted == false) {
+        return false;
+      }
+    }
+
+    return await android.areNotificationsEnabled() ?? true;
+  }
+
+  Future<void> _requestExactAlarmPermissionOnce() async {
+    if (_requestedExactAlarmPermission) {
+      return;
+    }
+
+    final android = _androidPlugin;
+    if (android == null) {
+      return;
+    }
+
+    _requestedExactAlarmPermission = true;
+    final canScheduleExact = await android.canScheduleExactNotifications();
+    if (canScheduleExact == false) {
+      await android.requestExactAlarmsPermission();
+    }
+  }
+
+  Future<AndroidScheduleMode> _androidScheduleMode() async {
+    final canScheduleExact =
+        await _androidPlugin?.canScheduleExactNotifications() ?? true;
+    return canScheduleExact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  }
+
+  AndroidFlutterLocalNotificationsPlugin? get _androidPlugin {
+    return _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+  }
+
   NotificationDetails get _notificationDetails => const NotificationDetails(
     android: AndroidNotificationDetails(
       'unebil_daily_facts',
@@ -172,6 +279,22 @@ class NotificationScheduler implements FactNotificationScheduler {
         'Open UneBil and generate a new short fact about "$topic".',
     };
   }
+
+  String _testTitle(AppLanguage language) {
+    return switch (language) {
+      AppLanguage.ru => 'Проверка UneBil',
+      AppLanguage.kk => 'UneBil тексеру',
+      AppLanguage.en => 'UneBil test',
+    };
+  }
+
+  String _testBody(AppLanguage language) {
+    return switch (language) {
+      AppLanguage.ru => 'Если ты видишь это, уведомления работают.',
+      AppLanguage.kk => 'Осы хабарлама көрінсе, ескертулер жұмыс істейді.',
+      AppLanguage.en => 'If you can see this, notifications are working.',
+    };
+  }
 }
 
 class NoopNotificationScheduler implements FactNotificationScheduler {
@@ -180,6 +303,13 @@ class NoopNotificationScheduler implements FactNotificationScheduler {
 
   @override
   Future<void> scheduleDailyFacts({
+    required AppSettings settings,
+    required List<Topic> topics,
+    required List<LearningFact> facts,
+  }) async {}
+
+  @override
+  Future<void> showTestNotification({
     required AppSettings settings,
     required List<Topic> topics,
     required List<LearningFact> facts,

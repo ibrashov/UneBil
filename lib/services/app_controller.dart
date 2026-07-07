@@ -87,7 +87,10 @@ class AppController extends ChangeNotifier {
     }
 
     _topics = _topics
-        .map((topic) => topic.id == topicId ? topic.copyWith(title: trimmed) : topic)
+        .map(
+          (topic) =>
+              topic.id == topicId ? topic.copyWith(title: trimmed) : topic,
+        )
         .toList();
     _facts = _facts
         .map(
@@ -111,7 +114,10 @@ class AppController extends ChangeNotifier {
 
   Future<void> toggleTopic(String topicId, bool enabled) async {
     _topics = _topics
-        .map((topic) => topic.id == topicId ? topic.copyWith(enabled: enabled) : topic)
+        .map(
+          (topic) =>
+              topic.id == topicId ? topic.copyWith(enabled: enabled) : topic,
+        )
         .toList();
     await _saveTopicsAndSchedule();
   }
@@ -134,8 +140,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> addNotificationTime(NotificationTime time) {
-    final times = <NotificationTime>{..._settings.notificationTimes, time}.toList()
-      ..sort();
+    final times = <NotificationTime>{
+      ..._settings.notificationTimes,
+      time,
+    }.toList()..sort();
     return updateSettings(_settings.copyWith(notificationTimes: times));
   }
 
@@ -153,14 +161,14 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> generateFactsForTopic(
+  Future<int> generateFactsForTopic(
     String topicId, {
     int count = 1,
     bool silent = false,
   }) async {
     final topic = _topics.where((topic) => topic.id == topicId).firstOrNull;
     if (topic == null) {
-      return;
+      return 0;
     }
 
     if (!silent) {
@@ -169,6 +177,7 @@ class AppController extends ChangeNotifier {
       notifyListeners();
     }
 
+    var addedCount = 0;
     try {
       final generated = await _factGenerator.generateFacts(
         topic: topic.title,
@@ -176,6 +185,10 @@ class AppController extends ChangeNotifier {
         length: _settings.length,
         count: count,
       );
+      if (generated.isEmpty) {
+        throw StateError('empty facts response');
+      }
+
       final now = DateTime.now();
       final newFacts = generated
           .map(
@@ -195,13 +208,40 @@ class AppController extends ChangeNotifier {
       _facts = <LearningFact>[...newFacts, ..._facts].take(120).toList();
       await _storage.saveFacts(_facts);
       await _rescheduleNotifications();
+      addedCount = newFacts.length;
+    } on FactGenerationException catch (error) {
+      _lastError = error.message;
     } catch (_) {
-      _lastError = 'Не удалось получить факт. Проверь backend или интернет.';
+      _lastError =
+          'Не удалось получить факт. Запусти backend или проверь AI-ключ.';
     } finally {
       if (!silent) {
         _generatingTopicId = null;
       }
       notifyListeners();
+    }
+    return addedCount;
+  }
+
+  Future<bool> showTestNotification() async {
+    _lastError = null;
+    try {
+      await _scheduler.showTestNotification(
+        settings: _settings,
+        topics: _topics,
+        facts: _facts,
+      );
+      notifyListeners();
+      return true;
+    } on NotificationPermissionException catch (error) {
+      _lastError = error.message;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _lastError =
+          'Не удалось показать тестовое уведомление. Проверь разрешения Android.';
+      notifyListeners();
+      return false;
     }
   }
 

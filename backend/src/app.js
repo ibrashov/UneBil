@@ -6,6 +6,11 @@ const lengthModes = {
   medium: 40,
   detailed: 70,
 };
+const languageNames = {
+  ru: 'Russian',
+  kk: 'Kazakh',
+  en: 'English',
+};
 
 const app = express();
 
@@ -24,6 +29,10 @@ app.post('/api/generate-facts', async (request, response) => {
   const { topic, language, lengthMode, count } = validation.value;
 
   const aiProvider = getAiProviderConfig();
+  if (aiProvider?.error) {
+    return response.status(503).json({ error: aiProvider.error });
+  }
+
   if (!aiProvider) {
     return response.json({
       facts: makeMockFacts({ topic, language, lengthMode, count }),
@@ -40,6 +49,9 @@ app.post('/api/generate-facts', async (request, response) => {
       count,
       targetWords: lengthModes[lengthMode],
     });
+    if (facts.length === 0) {
+      throw new Error('AI provider returned no usable facts');
+    }
     response.json({ facts, source: aiProvider.name });
   } catch (error) {
     response.status(502).json({
@@ -87,8 +99,10 @@ export function validateGenerateFactsRequest(body) {
 }
 
 export function makeMockFacts({ topic, language, lengthMode, count }) {
+  const baseNumber = Date.now() % 9000;
+
   return Array.from({ length: count }, (_, index) => {
-    const number = index + 1;
+    const number = baseNumber + index + 1;
     const suffix = lengthMode === 'detailed'
       ? ' Добавь один пример из жизни, чтобы лучше запомнить эту мысль.'
       : '';
@@ -120,9 +134,18 @@ export function makeMockFacts({ topic, language, lengthMode, count }) {
 function getAiProviderConfig() {
   const requestedProvider = (process.env.AI_PROVIDER || '').trim().toLowerCase();
 
+  if (requestedProvider &&
+      requestedProvider !== 'cerebras' &&
+      requestedProvider !== 'openai') {
+    return {
+      error: 'AI_PROVIDER must be empty, "cerebras", or "openai"',
+    };
+  }
+
   if (requestedProvider === 'cerebras') {
     return makeProviderConfig({
       name: 'cerebras',
+      apiKeyName: 'CEREBRAS_API_KEY',
       apiKey: process.env.CEREBRAS_API_KEY,
       baseUrl: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
       model: process.env.CEREBRAS_MODEL || process.env.AI_MODEL || 'gemma-4-31b',
@@ -133,6 +156,7 @@ function getAiProviderConfig() {
   if (requestedProvider === 'openai') {
     return makeProviderConfig({
       name: 'openai',
+      apiKeyName: 'OPENAI_API_KEY',
       apiKey: process.env.OPENAI_API_KEY,
       baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini',
@@ -143,6 +167,7 @@ function getAiProviderConfig() {
   if (process.env.CEREBRAS_API_KEY) {
     return makeProviderConfig({
       name: 'cerebras',
+      apiKeyName: 'CEREBRAS_API_KEY',
       apiKey: process.env.CEREBRAS_API_KEY,
       baseUrl: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
       model: process.env.CEREBRAS_MODEL || process.env.AI_MODEL || 'gemma-4-31b',
@@ -153,6 +178,7 @@ function getAiProviderConfig() {
   if (process.env.OPENAI_API_KEY) {
     return makeProviderConfig({
       name: 'openai',
+      apiKeyName: 'OPENAI_API_KEY',
       apiKey: process.env.OPENAI_API_KEY,
       baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini',
@@ -163,10 +189,19 @@ function getAiProviderConfig() {
   return null;
 }
 
-function makeProviderConfig({ name, apiKey, baseUrl, model, supportsJsonMode }) {
+function makeProviderConfig({
+  name,
+  apiKeyName,
+  apiKey,
+  baseUrl,
+  model,
+  supportsJsonMode,
+}) {
   const trimmedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!trimmedApiKey) {
-    return null;
+    return {
+      error: `${apiKeyName} is required for ${name} generation`,
+    };
   }
 
   return {
@@ -186,6 +221,7 @@ async function generateFactsWithAi({
   count,
   targetWords,
 }) {
+  const languageName = languageNames[language];
   const requestBody = {
     model: provider.model,
     temperature: 0.7,
@@ -193,17 +229,19 @@ async function generateFactsWithAi({
       {
         role: 'system',
         content:
-          'You create concise educational notification text. Respond only with valid JSON: {"facts":[{"title":"...","body":"..."}]}. Do not wrap it in markdown.',
+          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"title":"...","body":"..."}]}. Do not wrap it in markdown. Do not give generic study advice; each item must contain a concrete fact about the topic.',
       },
       {
         role: 'user',
         content: [
           `Topic: ${topic}`,
-          `Language: ${language}`,
+          `Language: ${languageName} (${language})`,
           `Length mode: ${lengthMode}`,
           `Target body length: about ${targetWords} words`,
           `Count: ${count}`,
+          'Write every title and body in the requested language only.',
           'Each fact must be useful, specific, safe, and readable as a phone notification.',
+          'Avoid templates like "ask one question", "learn more", or "check the answer"; include the actual fact.',
         ].join('\n'),
       },
     ],
@@ -238,13 +276,19 @@ async function generateFactsWithAi({
     throw new Error(`${provider.name} response JSON did not include facts array`);
   }
 
-  return parsed.facts
+  const facts = parsed.facts
     .map((fact) => ({
       title: String(fact.title ?? '').trim(),
       body: String(fact.body ?? '').trim(),
     }))
     .filter((fact) => fact.title && fact.body)
     .slice(0, count);
+
+  if (facts.length === 0) {
+    throw new Error(`${provider.name} response did not include usable facts`);
+  }
+
+  return facts;
 }
 
 function parseJsonObject(content) {

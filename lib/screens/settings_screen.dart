@@ -102,6 +102,18 @@ class SettingsScreen extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 12),
+              _SettingsCard(
+                title: 'Проверка уведомлений',
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => _sendTestNotification(context, controller),
+                    icon: const Icon(Icons.notifications_active_outlined),
+                    label: const Text('Показать тестовое уведомление'),
+                  ),
+                ),
+              ),
             ],
           ),
         );
@@ -150,4 +162,21 @@ Future<void> _pickTime(BuildContext context, AppController controller) async {
   await controller.addNotificationTime(
     NotificationTime(hour: picked.hour, minute: picked.minute),
   );
+}
+
+Future<void> _sendTestNotification(
+  BuildContext context,
+  AppController controller,
+) async {
+  final delivered = await controller.showTestNotification();
+  if (!context.mounted) {
+    return;
+  }
+
+  final message = delivered
+      ? 'Тестовое уведомление отправлено. Если его не видно, разреши уведомления для UneBil.'
+      : controller.lastError ?? 'Не удалось показать тестовое уведомление.';
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
 }

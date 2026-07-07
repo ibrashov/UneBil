@@ -28,7 +28,9 @@ class AiClient implements FactGenerator {
   }) async {
     final trimmedBaseUrl = baseUrl.trim();
     if (trimmedBaseUrl.isEmpty) {
-      return _mockFacts(topic, language, length, count);
+      throw const FactGenerationException(
+        'Не задан API_BASE_URL. Запусти приложение с адресом backend.',
+      );
     }
 
     try {
@@ -38,9 +40,7 @@ class AiClient implements FactGenerator {
       final response = await _client
           .post(
             uri,
-            headers: const <String, String>{
-              'Content-Type': 'application/json',
-            },
+            headers: const <String, String>{'Content-Type': 'application/json'},
             body: jsonEncode(<String, Object>{
               'topic': topic,
               'language': language.code,
@@ -51,52 +51,68 @@ class AiClient implements FactGenerator {
           .timeout(const Duration(seconds: 20));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return _mockFacts(topic, language, length, count);
+        final details = _backendErrorDetails(response.body);
+        throw FactGenerationException(
+          details.isEmpty
+              ? 'Backend вернул ошибку ${response.statusCode}.'
+              : 'Backend вернул ошибку ${response.statusCode}: $details',
+        );
       }
 
       final decoded = jsonDecode(response.body);
-      final rawFacts = decoded is Map<String, dynamic> ? decoded['facts'] : null;
+      if (decoded is! Map<String, dynamic>) {
+        throw const FactGenerationException(
+          'Backend вернул ответ не в формате JSON-объекта.',
+        );
+      }
+
+      if (decoded['source'] == 'mock') {
+        throw const FactGenerationException(
+          'Backend работает в mock-режиме: AI-ключ не загружен. Перезапусти backend из папки backend и проверь .env.',
+        );
+      }
+
+      final rawFacts = decoded['facts'];
       if (rawFacts is! List) {
-        return _mockFacts(topic, language, length, count);
+        throw const FactGenerationException(
+          'Backend вернул ответ без списка фактов.',
+        );
       }
 
       final facts = rawFacts
           .whereType<Map>()
-          .map((item) => GeneratedFact.fromJson(Map<String, dynamic>.from(item)))
+          .map(
+            (item) => GeneratedFact.fromJson(Map<String, dynamic>.from(item)),
+          )
           .where((fact) => fact.title.isNotEmpty && fact.body.isNotEmpty)
           .toList();
 
-      return facts.isEmpty ? _mockFacts(topic, language, length, count) : facts;
+      if (facts.isEmpty) {
+        throw const FactGenerationException(
+          'Backend вернул пустой список фактов.',
+        );
+      }
+
+      return facts;
+    } on FactGenerationException {
+      rethrow;
     } catch (_) {
-      return _mockFacts(topic, language, length, count);
+      throw const FactGenerationException(
+        'Backend недоступен. Запусти backend или проверь адрес API.',
+      );
     }
   }
 
-  List<GeneratedFact> _mockFacts(
-    String topic,
-    AppLanguage language,
-    NotificationLength length,
-    int count,
-  ) {
-    return List<GeneratedFact>.generate(count.clamp(1, 8), (index) {
-      final number = index + 1;
-      return switch (language) {
-        AppLanguage.ru => GeneratedFact(
-            title: '$topic: факт $number',
-            body:
-                'Идея про "$topic": выбери один маленький вопрос и проверь его сегодня. Так интерес превращается в знание без длинной учебы.',
-          ),
-        AppLanguage.kk => GeneratedFact(
-            title: '$topic: дерек $number',
-            body:
-                '"$topic" туралы ой: бүгін бір шағын сұрақ таңдап, жауабын тексер. Қызығушылық осылай күн сайын білімге айналады.',
-          ),
-        AppLanguage.en => GeneratedFact(
-            title: '$topic: fact $number',
-            body:
-                'A useful idea about "$topic": choose one small question and test it today. Curiosity becomes knowledge through tiny daily steps.',
-          ),
-      };
-    });
+  String _backendErrorDetails(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) {
+        final details = decoded['details'] ?? decoded['error'];
+        return details is String ? details.trim() : '';
+      }
+    } catch (_) {
+      return body.trim();
+    }
+    return '';
   }
 }

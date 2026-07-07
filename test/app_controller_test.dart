@@ -60,6 +60,16 @@ void main() {
       const NotificationTime(hour: 18, minute: 30),
     ));
   });
+
+  test('shows a test notification through scheduler', () async {
+    final scheduler = RecordingScheduler();
+    final controller = await createController(scheduler: scheduler);
+
+    final delivered = await controller.showTestNotification();
+
+    expect(delivered, isTrue);
+    expect(scheduler.testNotificationCalls, 1);
+  });
 }
 
 Future<SharedPreferences> mockPrefs() async {
@@ -104,6 +114,7 @@ class FakeFactGenerator implements FactGenerator {
 
 class RecordingScheduler implements FactNotificationScheduler {
   int scheduleCalls = 0;
+  int testNotificationCalls = 0;
   AppSettings? lastSettings;
   List<Topic>? lastTopics;
   List<LearningFact>? lastFacts;
@@ -118,6 +129,18 @@ class RecordingScheduler implements FactNotificationScheduler {
     required List<LearningFact> facts,
   }) async {
     scheduleCalls += 1;
+    lastSettings = settings;
+    lastTopics = topics;
+    lastFacts = facts;
+  }
+
+  @override
+  Future<void> showTestNotification({
+    required AppSettings settings,
+    required List<Topic> topics,
+    required List<LearningFact> facts,
+  }) async {
+    testNotificationCalls += 1;
     lastSettings = settings;
     lastTopics = topics;
     lastFacts = facts;
