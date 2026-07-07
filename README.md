@@ -64,15 +64,18 @@ npm install
 npm start
 ```
 
-Without `OPENAI_API_KEY`, the backend returns deterministic mock facts so the app can be tested locally.
+Without an AI API key, the backend returns deterministic mock facts so the app can be tested locally.
 
-To use AI generation, create environment variables based on `backend/.env.example`:
+To use Cerebras AI generation, create `backend/.env` based on `backend/.env.example`:
 
 ```sh
-set OPENAI_API_KEY=your_key_here
-set AI_MODEL=gpt-4.1-mini
+AI_PROVIDER=cerebras
+CEREBRAS_API_KEY=your_key_here
+CEREBRAS_MODEL=gemma-4-31b
 npm start
 ```
+
+OpenAI-compatible generation is still available with `AI_PROVIDER=openai` and `OPENAI_API_KEY`.
 
 Run backend tests:
 

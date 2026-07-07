@@ -1,0 +1,14 @@
+$env:ANDROID_HOME="C:\Users\48F4~1\AppData\Local\Android\Sdk"
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:ANDROID_AVD_HOME="C:\Android\avd"
+
+& "$env:ANDROID_HOME\emulator\emulator.exe" -avd UneBil_API35 -no-snapshot-load
+
+
+cd C:\Android\UneBilApp
+
+$env:ANDROID_HOME="C:\Users\48F4~1\AppData\Local\Android\Sdk"
+$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
+$env:ANDROID_AVD_HOME="C:\Android\avd"
+
+flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:3000

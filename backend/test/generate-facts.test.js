@@ -8,6 +8,8 @@ let baseUrl;
 
 before(async () => {
   delete process.env.OPENAI_API_KEY;
+  delete process.env.CEREBRAS_API_KEY;
+  delete process.env.AI_PROVIDER;
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   const address = server.address();
