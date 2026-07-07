@@ -25,6 +25,7 @@ class AiClient implements FactGenerator {
     required AppLanguage language,
     required NotificationLength length,
     int count = 1,
+    List<GeneratedFact> excludedFacts = const <GeneratedFact>[],
   }) async {
     final trimmedBaseUrl = baseUrl.trim();
     if (trimmedBaseUrl.isEmpty) {
@@ -46,6 +47,15 @@ class AiClient implements FactGenerator {
               'language': language.code,
               'lengthMode': length.id,
               'count': count,
+              if (excludedFacts.isNotEmpty)
+                'excludedFacts': excludedFacts
+                    .map(
+                      (fact) => <String, String>{
+                        'title': fact.title,
+                        'body': fact.body,
+                      },
+                    )
+                    .toList(),
             }),
           )
           .timeout(const Duration(seconds: 20));

@@ -179,20 +179,34 @@ class AppController extends ChangeNotifier {
 
     var addedCount = 0;
     try {
+      final excludedFacts = _excludedFactsFor(topic);
       final generated = await _factGenerator.generateFacts(
         topic: topic.title,
         language: _settings.language,
         length: _settings.length,
         count: count,
+        excludedFacts: excludedFacts,
       );
       if (generated.isEmpty) {
         throw StateError('empty facts response');
       }
 
       final now = DateTime.now();
-      final newFacts = generated
-          .map(
-            (fact) => LearningFact(
+      final usedFingerprints = excludedFacts
+          .map((fact) => _factFingerprint(fact.title, fact.body))
+          .where((fingerprint) => fingerprint.isNotEmpty)
+          .toSet();
+      final newFacts = <LearningFact>[];
+
+      for (final fact in generated) {
+        final fingerprint = _factFingerprint(fact.title, fact.body);
+        if (fingerprint.isEmpty || usedFingerprints.contains(fingerprint)) {
+          continue;
+        }
+
+        usedFingerprints.add(fingerprint);
+        newFacts.add(
+          LearningFact(
               id: _uuid.v4(),
               topicId: topic.id,
               topicTitle: topic.title,
@@ -202,8 +216,14 @@ class AppController extends ChangeNotifier {
               length: _settings.length,
               createdAt: now,
             ),
-          )
-          .toList();
+        );
+      }
+
+      if (newFacts.isEmpty) {
+        throw const FactGenerationException(
+          'AI вернул только уже сохраненные факты. Попробуй нажать генерацию еще раз.',
+        );
+      }
 
       _facts = <LearningFact>[...newFacts, ..._facts].take(120).toList();
       await _storage.saveFacts(_facts);
@@ -257,5 +277,28 @@ class AppController extends ChangeNotifier {
       topics: _topics,
       facts: _facts,
     );
+  }
+
+  List<GeneratedFact> _excludedFactsFor(Topic topic) {
+    return _facts
+        .where(
+          (fact) =>
+              fact.topicId == topic.id && fact.language == _settings.language,
+        )
+        .map(
+          (fact) => GeneratedFact(
+            title: fact.title,
+            body: fact.body,
+          ),
+        )
+        .take(30)
+        .toList(growable: false);
+  }
+
+  String _factFingerprint(String title, String body) {
+    return '$title $body'
+        .toLowerCase()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 }

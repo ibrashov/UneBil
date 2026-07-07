@@ -17,5 +17,6 @@ abstract class FactGenerator {
     required AppLanguage language,
     required NotificationLength length,
     int count = 1,
+    List<GeneratedFact> excludedFacts = const <GeneratedFact>[],
   });
 }

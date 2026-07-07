@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
-import app from '../src/app.js';
+import app, { validateGenerateFactsRequest } from '../src/app.js';
 
 let server;
 let baseUrl;
@@ -74,4 +74,44 @@ test('invalid length mode is rejected', async () => {
   assert.equal(response.status, 400);
   const body = await response.json();
   assert.match(body.error, /lengthMode/);
+});
+
+test('valid request accepts excluded facts', () => {
+  const result = validateGenerateFactsRequest({
+    topic: 'animals',
+    language: 'en',
+    lengthMode: 'short',
+    count: 1,
+    excludedFacts: [
+      {
+        title: ' Octopus Hearts ',
+        body: ' Octopuses have three hearts. ',
+      },
+      {
+        title: '',
+        body: '',
+      },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.excludedFacts, [
+    {
+      title: 'Octopus Hearts',
+      body: 'Octopuses have three hearts.',
+    },
+  ]);
+});
+
+test('invalid excluded facts are rejected', () => {
+  const result = validateGenerateFactsRequest({
+    topic: 'animals',
+    language: 'en',
+    lengthMode: 'short',
+    count: 1,
+    excludedFacts: 'Octopus Hearts',
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /excludedFacts/);
 });

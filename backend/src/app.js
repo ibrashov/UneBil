@@ -6,6 +6,9 @@ const lengthModes = {
   medium: 40,
   detailed: 70,
 };
+const maxExcludedFacts = 30;
+const maxExcludedTitleLength = 160;
+const maxExcludedBodyLength = 700;
 const languageNames = {
   ru: 'Russian',
   kk: 'Kazakh',
@@ -26,7 +29,7 @@ app.post('/api/generate-facts', async (request, response) => {
     return response.status(400).json({ error: validation.error });
   }
 
-  const { topic, language, lengthMode, count } = validation.value;
+  const { topic, language, lengthMode, count, excludedFacts } = validation.value;
 
   const aiProvider = getAiProviderConfig();
   if (aiProvider?.error) {
@@ -35,7 +38,13 @@ app.post('/api/generate-facts', async (request, response) => {
 
   if (!aiProvider) {
     return response.json({
-      facts: makeMockFacts({ topic, language, lengthMode, count }),
+      facts: makeMockFacts({
+        topic,
+        language,
+        lengthMode,
+        count,
+        excludedFacts,
+      }),
       source: 'mock',
     });
   }
@@ -48,6 +57,7 @@ app.post('/api/generate-facts', async (request, response) => {
       lengthMode,
       count,
       targetWords: lengthModes[lengthMode],
+      excludedFacts,
     });
     if (facts.length === 0) {
       throw new Error('AI provider returned no usable facts');
@@ -70,6 +80,7 @@ export function validateGenerateFactsRequest(body) {
   const language = typeof body.language === 'string' ? body.language : '';
   const lengthMode = typeof body.lengthMode === 'string' ? body.lengthMode : '';
   const count = Number(body.count ?? 1);
+  const excludedFactsValidation = validateExcludedFacts(body.excludedFacts);
 
   if (topic.length < 2 || topic.length > 80) {
     return { ok: false, error: 'topic must be between 2 and 80 characters' };
@@ -86,6 +97,9 @@ export function validateGenerateFactsRequest(body) {
   if (!Number.isInteger(count) || count < 1 || count > 8) {
     return { ok: false, error: 'count must be an integer from 1 to 8' };
   }
+  if (!excludedFactsValidation.ok) {
+    return { ok: false, error: excludedFactsValidation.error };
+  }
 
   return {
     ok: true,
@@ -94,14 +108,73 @@ export function validateGenerateFactsRequest(body) {
       language,
       lengthMode,
       count,
+      excludedFacts: excludedFactsValidation.value,
     },
   };
 }
 
-export function makeMockFacts({ topic, language, lengthMode, count }) {
-  const baseNumber = Date.now() % 9000;
+function validateExcludedFacts(rawExcludedFacts) {
+  if (rawExcludedFacts === undefined) {
+    return { ok: true, value: [] };
+  }
 
-  return Array.from({ length: count }, (_, index) => {
+  if (!Array.isArray(rawExcludedFacts)) {
+    return { ok: false, error: 'excludedFacts must be an array' };
+  }
+  if (rawExcludedFacts.length > maxExcludedFacts) {
+    return {
+      ok: false,
+      error: `excludedFacts must include at most ${maxExcludedFacts} items`,
+    };
+  }
+
+  const excludedFacts = [];
+  for (const [index, fact] of rawExcludedFacts.entries()) {
+    if (!fact || typeof fact !== 'object' || Array.isArray(fact)) {
+      return {
+        ok: false,
+        error: `excludedFacts[${index}] must be an object`,
+      };
+    }
+
+    const title = typeof fact.title === 'string' ? fact.title.trim() : '';
+    const body = typeof fact.body === 'string' ? fact.body.trim() : '';
+    if (title.length > maxExcludedTitleLength) {
+      return {
+        ok: false,
+        error: `excludedFacts[${index}].title is too long`,
+      };
+    }
+    if (body.length > maxExcludedBodyLength) {
+      return {
+        ok: false,
+        error: `excludedFacts[${index}].body is too long`,
+      };
+    }
+
+    if (title || body) {
+      excludedFacts.push({ title, body });
+    }
+  }
+
+  return { ok: true, value: excludedFacts };
+}
+
+export function makeMockFacts({
+  topic,
+  language,
+  lengthMode,
+  count,
+  excludedFacts = [],
+}) {
+  const baseNumber = Date.now() % 9000;
+  const usedFingerprints = new Set(
+    excludedFacts.map((fact) => factFingerprint(fact.title, fact.body)),
+  );
+
+  const candidates = Array.from(
+    { length: count + maxExcludedFacts + 20 },
+    (_, index) => {
     const number = baseNumber + index + 1;
     const suffix = lengthMode === 'detailed'
       ? ' Добавь один пример из жизни, чтобы лучше запомнить эту мысль.'
@@ -129,6 +202,17 @@ export function makeMockFacts({ topic, language, lengthMode, count }) {
         `Идея про "${topic}": выбери один маленький вопрос и найди ответ сегодня. Так интерес превращается в знание.${suffix}`,
     };
   });
+
+  return candidates
+    .filter((fact) => {
+      const fingerprint = factFingerprint(fact.title, fact.body);
+      if (!fingerprint || usedFingerprints.has(fingerprint)) {
+        return false;
+      }
+      usedFingerprints.add(fingerprint);
+      return true;
+    })
+    .slice(0, count);
 }
 
 function getAiProviderConfig() {
@@ -220,16 +304,18 @@ async function generateFactsWithAi({
   lengthMode,
   count,
   targetWords,
+  excludedFacts,
 }) {
   const languageName = languageNames[language];
+  const candidateCount = Math.min(8, count + (excludedFacts.length > 0 ? 3 : 0));
   const requestBody = {
     model: provider.model,
-    temperature: 0.7,
+    temperature: 0.9,
     messages: [
       {
         role: 'system',
         content:
-          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"title":"...","body":"..."}]}. Do not wrap it in markdown. Do not give generic study advice; each item must contain a concrete fact about the topic.',
+          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"title":"...","body":"..."}]}. Do not wrap it in markdown. Do not give generic study advice; each item must contain a concrete fact about the topic. Every returned fact must be new and must not repeat the provided previous facts.',
       },
       {
         role: 'user',
@@ -238,10 +324,14 @@ async function generateFactsWithAi({
           `Language: ${languageName} (${language})`,
           `Length mode: ${lengthMode}`,
           `Target body length: about ${targetWords} words`,
-          `Count: ${count}`,
+          `Count: ${candidateCount}`,
           'Write every title and body in the requested language only.',
           'Each fact must be useful, specific, safe, and readable as a phone notification.',
           'Avoid templates like "ask one question", "learn more", or "check the answer"; include the actual fact.',
+          'Avoid repeating the same fact, idea, example, mechanism, statistic, or wording from the previous facts.',
+          excludedFacts.length > 0
+            ? `Previous facts to avoid:\n${formatExcludedFactsForPrompt(excludedFacts)}`
+            : 'No previous facts were provided.',
         ].join('\n'),
       },
     ],
@@ -276,19 +366,92 @@ async function generateFactsWithAi({
     throw new Error(`${provider.name} response JSON did not include facts array`);
   }
 
-  const facts = parsed.facts
-    .map((fact) => ({
-      title: String(fact.title ?? '').trim(),
-      body: String(fact.body ?? '').trim(),
-    }))
-    .filter((fact) => fact.title && fact.body)
-    .slice(0, count);
+  const facts = [];
+  for (const rawFact of parsed.facts) {
+    const fact = {
+      title: String(rawFact?.title ?? '').trim(),
+      body: String(rawFact?.body ?? '').trim(),
+    };
+    if (!fact.title || !fact.body) {
+      continue;
+    }
+    if (isDuplicateFact(fact, [...excludedFacts, ...facts])) {
+      continue;
+    }
+    facts.push(fact);
+    if (facts.length === count) {
+      break;
+    }
+  }
 
   if (facts.length === 0) {
     throw new Error(`${provider.name} response did not include usable facts`);
   }
 
   return facts;
+}
+
+function formatExcludedFactsForPrompt(excludedFacts) {
+  return excludedFacts
+    .slice(0, maxExcludedFacts)
+    .map((fact, index) => (
+      `${index + 1}. Title: ${fact.title}\n   Body: ${fact.body}`
+    ))
+    .join('\n');
+}
+
+function isDuplicateFact(candidate, existingFacts) {
+  const candidateFingerprint = factFingerprint(candidate.title, candidate.body);
+  if (!candidateFingerprint) {
+    return true;
+  }
+
+  const candidateTokens = tokenSet(candidate);
+  for (const existingFact of existingFacts) {
+    if (candidateFingerprint === factFingerprint(
+      existingFact.title,
+      existingFact.body,
+    )) {
+      return true;
+    }
+
+    const existingTokens = tokenSet(existingFact);
+    const minSize = Math.min(candidateTokens.size, existingTokens.size);
+    if (minSize < 6) {
+      continue;
+    }
+
+    let shared = 0;
+    for (const token of candidateTokens) {
+      if (existingTokens.has(token)) {
+        shared += 1;
+      }
+    }
+    if (shared / minSize >= 0.82) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function tokenSet(fact) {
+  return new Set(
+    factFingerprint(fact.title, fact.body)
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((token) => token.length > 2),
+  );
+}
+
+function factFingerprint(title, body) {
+  return normalizeText(`${title} ${body}`);
+}
+
+function normalizeText(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function parseJsonObject(content) {
