@@ -2,15 +2,17 @@ import 'app_language.dart';
 import 'notification_length.dart';
 
 class GeneratedFact {
-  const GeneratedFact({required this.title, required this.body});
+  const GeneratedFact({required this.title, required this.body, this.key = ''});
 
   final String title;
   final String body;
+  final String key;
 
   factory GeneratedFact.fromJson(Map<String, dynamic> json) {
     return GeneratedFact(
       title: (json['title'] as String? ?? '').trim(),
       body: (json['body'] as String? ?? '').trim(),
+      key: (json['key'] as String? ?? '').trim(),
     );
   }
 }
@@ -25,6 +27,7 @@ class LearningFact {
     required this.language,
     required this.length,
     required this.createdAt,
+    this.key = '',
   });
 
   final String id;
@@ -35,6 +38,7 @@ class LearningFact {
   final AppLanguage language;
   final NotificationLength length;
   final DateTime createdAt;
+  final String key;
 
   factory LearningFact.fromJson(Map<String, dynamic> json) {
     return LearningFact(
@@ -45,8 +49,10 @@ class LearningFact {
       body: json['body'] as String? ?? '',
       language: AppLanguage.fromCode(json['language'] as String?),
       length: NotificationLength.fromId(json['lengthMode'] as String?),
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ??
           DateTime.now(),
+      key: (json['key'] as String? ?? '').trim(),
     );
   }
 
@@ -59,5 +65,6 @@ class LearningFact {
     'language': language.code,
     'lengthMode': length.id,
     'createdAt': createdAt.toIso8601String(),
+    if (key.isNotEmpty) 'key': key,
   };
 }
