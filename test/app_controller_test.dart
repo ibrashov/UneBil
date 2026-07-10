@@ -6,8 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unebil/models/app_language.dart';
 import 'package:unebil/models/app_settings.dart';
 import 'package:unebil/models/learning_fact.dart';
+import 'package:unebil/models/notification_interval.dart';
 import 'package:unebil/models/notification_length.dart';
-import 'package:unebil/models/notification_time.dart';
 import 'package:unebil/models/topic.dart';
 import 'package:unebil/services/app_controller.dart';
 import 'package:unebil/services/fact_generator.dart';
@@ -31,7 +31,7 @@ void main() {
     expect(controller.topics.single.title, 'Космос');
     expect(controller.topics.single.enabled, isTrue);
     expect(fakeGenerator.calls, 1);
-    expect(controller.factsForTopic(controller.topics.single.id), hasLength(1));
+    expect(controller.factsForTopic(controller.topics.single.id), hasLength(3));
 
     await controller.toggleTopic(controller.topics.single.id, false);
     expect(controller.topics.single.enabled, isFalse);
@@ -39,6 +39,101 @@ void main() {
     await controller.deleteTopic(controller.topics.single.id);
     expect(controller.topics, isEmpty);
     expect(controller.facts, isEmpty);
+  });
+
+  test(
+    'defaults legacy topics to a two-hour interval and persists an ID',
+    () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'unebil.topics': jsonEncode(<Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'legacy-topic',
+            'title': 'History',
+            'enabled': true,
+            'createdAt': DateTime.utc(2026, 7, 1).toIso8601String(),
+          },
+        ]),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final controller = AppController(
+        StorageService(prefs),
+        FakeFactGenerator(),
+        RecordingScheduler(),
+      );
+
+      await controller.load();
+
+      final topic = controller.topics.single;
+      expect(topic.notificationInterval, NotificationInterval.everyTwoHours);
+      expect(topic.notificationId, greaterThanOrEqualTo(10000));
+      final saved = StorageService(prefs).loadTopics().single;
+      expect(saved.notificationInterval, NotificationInterval.everyTwoHours);
+      expect(saved.notificationId, topic.notificationId);
+    },
+  );
+
+  test('interval labels are available in every supported language', () {
+    expect(NotificationInterval.hourly.label(AppLanguage.ru), 'Каждый час');
+    expect(
+      NotificationInterval.everyTwoHours.label(AppLanguage.kk),
+      'Әр 2 сағат сайын',
+    );
+    expect(
+      NotificationInterval.everyThreeHours.label(AppLanguage.en),
+      'Every 3 hours',
+    );
+  });
+
+  test('plans a bounded rotating queue from cached facts', () {
+    final topic = Topic(
+      id: 'space',
+      title: 'Space',
+      enabled: true,
+      createdAt: DateTime.utc(2026, 7, 1),
+      notificationInterval: NotificationInterval.hourly,
+      notificationId: 12000,
+    );
+    final facts = <LearningFact>[
+      LearningFact(
+        id: 'first',
+        topicId: topic.id,
+        topicTitle: topic.title,
+        title: 'First fact',
+        body: 'First cached learning fact.',
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+        createdAt: DateTime.utc(2026, 7, 1),
+      ),
+      LearningFact(
+        id: 'second',
+        topicId: topic.id,
+        topicTitle: topic.title,
+        title: 'Second fact',
+        body: 'Second cached learning fact.',
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+        createdAt: DateTime.utc(2026, 7, 2),
+      ),
+    ];
+
+    final plan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+      ),
+      topics: <Topic>[topic],
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10),
+      notificationsPerTopic: 3,
+    );
+
+    expect(plan.map((item) => item.id), <int>[12000, 12001, 12002]);
+    expect(
+      plan[1].scheduledAt.difference(plan[0].scheduledAt),
+      const Duration(hours: 1),
+    );
+    expect(plan[0].title, isNot(plan[1].title));
+    expect(plan[0].title, plan[2].title);
   });
 
   test('generates against previous facts and skips duplicate responses', () async {
@@ -315,18 +410,37 @@ void main() {
 
     await controller.updateLanguage(AppLanguage.kk);
     await controller.updateLength(NotificationLength.detailed);
-    await controller.addNotificationTime(
-      const NotificationTime(hour: 18, minute: 30),
-    );
 
     final loaded = StorageService(prefs).loadSettings();
     expect(loaded.language, AppLanguage.kk);
     expect(loaded.length, NotificationLength.detailed);
-    expect(
-      loaded.notificationTimes,
-      contains(const NotificationTime(hour: 18, minute: 30)),
-    );
   });
+
+  test(
+    'changing a topic interval persists it and refreshes notifications',
+    () async {
+      final scheduler = RecordingScheduler();
+      final controller = await createController(scheduler: scheduler);
+      await controller.addTopic('Space', interval: NotificationInterval.hourly);
+      final original = controller.topics.single;
+      final scheduleCallsBeforeChange = scheduler.scheduleCalls;
+
+      await controller.updateTopic(
+        original.id,
+        title: 'Space science',
+        interval: NotificationInterval.everyThreeHours,
+      );
+
+      final updated = controller.topics.single;
+      expect(updated.title, 'Space science');
+      expect(
+        updated.notificationInterval,
+        NotificationInterval.everyThreeHours,
+      );
+      expect(updated.notificationId, original.notificationId);
+      expect(scheduler.scheduleCalls, scheduleCallsBeforeChange + 1);
+    },
+  );
 
   test('shows a test notification through scheduler', () async {
     final scheduler = RecordingScheduler();
@@ -473,7 +587,7 @@ class RecordingScheduler implements FactNotificationScheduler {
   Future<void> initialize() async {}
 
   @override
-  Future<void> scheduleDailyFacts({
+  Future<void> scheduleFacts({
     required AppSettings settings,
     required List<Topic> topics,
     required List<LearningFact> facts,

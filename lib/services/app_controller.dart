@@ -4,8 +4,8 @@ import 'package:uuid/uuid.dart';
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
 import '../models/learning_fact.dart';
+import '../models/notification_interval.dart';
 import '../models/notification_length.dart';
-import '../models/notification_time.dart';
 import '../models/topic.dart';
 import 'fact_generator.dart';
 import 'fact_deduplicator.dart';
@@ -33,6 +33,15 @@ class AppController extends ChangeNotifier {
   final Map<String, String> _generationErrors = <String, String>{};
   String? _lastError;
 
+  static const _notificationIdStart = 10000;
+  static const _notificationIdBlockSize =
+      NotificationScheduler.notificationsPerTopic;
+  static const _maximumNotificationBaseId =
+      2147483647 - (_notificationIdBlockSize - 1);
+  static const _notificationIdBlockCount =
+      (_maximumNotificationBaseId - _notificationIdStart + 1) ~/
+      _notificationIdBlockSize;
+
   List<Topic> get topics => List.unmodifiable(_topics);
   List<LearningFact> get facts => List.unmodifiable(_facts);
   AppSettings get settings => _settings;
@@ -51,10 +60,16 @@ class AppController extends ChangeNotifier {
   Future<void> load() async {
     _loading = true;
     notifyListeners();
-    _topics = _storage.loadTopics();
+    final normalizedTopics = _normalizeTopicNotificationIds(
+      _storage.loadTopics(),
+    );
+    _topics = normalizedTopics.topics;
     final cleanup = FactDeduplicator.cleanStoredFacts(_storage.loadFacts());
     _facts = cleanup.facts;
     _settings = _storage.loadSettings();
+    if (normalizedTopics.changed) {
+      await _storage.saveTopics(_topics);
+    }
     if (cleanup.changed) {
       await _storage.saveFacts(_facts);
     }
@@ -70,28 +85,51 @@ class AppController extends ChangeNotifier {
         .toList(growable: false);
   }
 
-  Future<void> addTopic(String title) async {
+  Future<void> addTopic(
+    String title, {
+    NotificationInterval interval = NotificationInterval.everyTwoHours,
+  }) async {
     final trimmed = title.trim();
     if (trimmed.isEmpty) {
       return;
     }
 
+    final id = _uuid.v4();
     final topic = Topic(
-      id: _uuid.v4(),
+      id: id,
       title: trimmed,
       enabled: true,
       createdAt: DateTime.now(),
+      notificationInterval: interval,
+      notificationId: _allocateNotificationId(
+        id,
+        _topics.map((topic) => topic.notificationId).toSet(),
+      ),
     );
     _topics = <Topic>[topic, ..._topics];
     await _saveTopicsAndSchedule();
-    await generateFactsForTopic(
-      topic.id,
-      count: _settings.notificationTimes.length.clamp(1, 3),
-      silent: true,
+    await generateFactsForTopic(topic.id, count: 3, silent: true);
+  }
+
+  Future<void> renameTopic(String topicId, String title) {
+    final topic = _topics
+        .where((candidate) => candidate.id == topicId)
+        .firstOrNull;
+    if (topic == null) {
+      return Future<void>.value();
+    }
+    return updateTopic(
+      topicId,
+      title: title,
+      interval: topic.notificationInterval,
     );
   }
 
-  Future<void> renameTopic(String topicId, String title) async {
+  Future<void> updateTopic(
+    String topicId, {
+    required String title,
+    required NotificationInterval interval,
+  }) async {
     final trimmed = title.trim();
     if (trimmed.isEmpty) {
       return;
@@ -99,8 +137,9 @@ class AppController extends ChangeNotifier {
 
     _topics = _topics
         .map(
-          (topic) =>
-              topic.id == topicId ? topic.copyWith(title: trimmed) : topic,
+          (topic) => topic.id == topicId
+              ? topic.copyWith(title: trimmed, notificationInterval: interval)
+              : topic,
         )
         .toList();
     _facts = _facts
@@ -149,21 +188,6 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateLength(NotificationLength length) {
     return updateSettings(_settings.copyWith(length: length));
-  }
-
-  Future<void> addNotificationTime(NotificationTime time) {
-    final times = <NotificationTime>{
-      ..._settings.notificationTimes,
-      time,
-    }.toList()..sort();
-    return updateSettings(_settings.copyWith(notificationTimes: times));
-  }
-
-  Future<void> removeNotificationTime(NotificationTime time) {
-    final times = _settings.notificationTimes
-        .where((candidate) => candidate != time)
-        .toList();
-    return updateSettings(_settings.copyWith(notificationTimes: times));
   }
 
   Future<void> updateSettings(AppSettings settings) async {
@@ -319,11 +343,62 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> _rescheduleNotifications() {
-    return _scheduler.scheduleDailyFacts(
+    return _scheduler.scheduleFacts(
       settings: _settings,
       topics: _topics,
       facts: _facts,
     );
+  }
+
+  ({List<Topic> topics, bool changed}) _normalizeTopicNotificationIds(
+    List<Topic> topics,
+  ) {
+    final usedIds = <int>{};
+    var changed = false;
+    final normalized = <Topic>[];
+
+    for (final topic in topics) {
+      var notificationId = topic.notificationId;
+      if (!_isValidUnusedNotificationId(notificationId, usedIds)) {
+        notificationId = _allocateNotificationId(topic.id, usedIds);
+        changed = true;
+      }
+      usedIds.add(notificationId);
+      normalized.add(
+        notificationId == topic.notificationId
+            ? topic
+            : topic.copyWith(notificationId: notificationId),
+      );
+    }
+    return (topics: normalized, changed: changed);
+  }
+
+  bool _isValidUnusedNotificationId(int id, Set<int> usedIds) {
+    return id >= _notificationIdStart &&
+        id <= _maximumNotificationBaseId &&
+        (id - _notificationIdStart) % _notificationIdBlockSize == 0 &&
+        !usedIds.contains(id);
+  }
+
+  int _allocateNotificationId(String seed, Set<int> usedIds) {
+    final firstBlock = _stableHash(seed) % _notificationIdBlockCount;
+    for (var offset = 0; offset < _notificationIdBlockCount; offset += 1) {
+      final block = (firstBlock + offset) % _notificationIdBlockCount;
+      final candidate = _notificationIdStart + block * _notificationIdBlockSize;
+      if (!usedIds.contains(candidate)) {
+        return candidate;
+      }
+    }
+    throw StateError('No notification IDs remain available.');
+  }
+
+  int _stableHash(String value) {
+    var hash = 2166136261;
+    for (final codeUnit in value.codeUnits) {
+      hash = (hash ^ codeUnit) * 16777619;
+      hash &= 0x7fffffff;
+    }
+    return hash;
   }
 
   List<GeneratedFact> _excludedFactsFor(Topic topic, AppLanguage language) {
