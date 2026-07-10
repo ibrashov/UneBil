@@ -1,14 +1,22 @@
 import express from 'express';
 
+import {
+  factFingerprint,
+  isDuplicateFact,
+} from './fact-deduplicator.js';
+
 const languages = new Set(['ru', 'kk', 'en']);
 const lengthModes = {
   short: 20,
   medium: 40,
   detailed: 70,
 };
-const maxExcludedFacts = 30;
+const maxExcludedFacts = 120;
 const maxExcludedTitleLength = 160;
 const maxExcludedBodyLength = 700;
+const maxExcludedKeyLength = 180;
+const maxGenerationAttempts = 3;
+const providerRequestTimeoutMs = 18000;
 const languageNames = {
   ru: 'Russian',
   kk: 'Kazakh',
@@ -17,7 +25,7 @@ const languageNames = {
 
 const app = express();
 
-app.use(express.json({ limit: '32kb' }));
+app.use(express.json({ limit: '128kb' }));
 
 app.get('/health', (_request, response) => {
   response.json({ ok: true });
@@ -37,6 +45,11 @@ app.post('/api/generate-facts', async (request, response) => {
   }
 
   if (!aiProvider) {
+    if (!mockFactsEnabled()) {
+      return response.status(503).json({
+        error: 'AI provider is not configured',
+      });
+    }
     return response.json({
       facts: makeMockFacts({
         topic,
@@ -64,8 +77,12 @@ app.post('/api/generate-facts', async (request, response) => {
     }
     response.json({ facts, source: aiProvider.name });
   } catch (error) {
-    response.status(502).json({
-      error: 'AI provider failed to generate facts',
+    const rateLimited = error instanceof AiProviderHttpError &&
+      error.statusCode === 429;
+    response.status(rateLimited ? 429 : 502).json({
+      error: rateLimited
+        ? 'AI provider rate limit reached'
+        : 'AI provider failed to generate facts',
       details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -139,6 +156,7 @@ function validateExcludedFacts(rawExcludedFacts) {
 
     const title = typeof fact.title === 'string' ? fact.title.trim() : '';
     const body = typeof fact.body === 'string' ? fact.body.trim() : '';
+    const key = typeof fact.key === 'string' ? fact.key.trim() : '';
     if (title.length > maxExcludedTitleLength) {
       return {
         ok: false,
@@ -151,9 +169,15 @@ function validateExcludedFacts(rawExcludedFacts) {
         error: `excludedFacts[${index}].body is too long`,
       };
     }
+    if (key.length > maxExcludedKeyLength) {
+      return {
+        ok: false,
+        error: `excludedFacts[${index}].key is too long`,
+      };
+    }
 
     if (title || body) {
-      excludedFacts.push({ title, body });
+      excludedFacts.push({ title, body, key });
     }
   }
 
@@ -184,7 +208,8 @@ export function makeMockFacts({
       return {
         title: `${topic}: дерек ${number}`,
         body:
-          `"${topic}" туралы шағын ой: бүгін бір сұрақ қойып, нақты жауап ізде. Қызығушылық күн сайын білімге айналады.`,
+          `[Mock ${number}] "${topic}" тақырыбына арналған сынақ жауабы. Нақты дерек алу үшін AI провайдерін баптаңыз.`,
+        key: `mock|${topic}|${number}`,
       };
     }
 
@@ -192,14 +217,16 @@ export function makeMockFacts({
       return {
         title: `${topic}: fact ${number}`,
         body:
-          `A useful idea about "${topic}": ask one small question today and check the answer. Tiny curiosity builds durable knowledge.`,
+          `[Mock ${number}] Test response for "${topic}". Configure an AI provider to receive a real educational fact.`,
+        key: `mock|${topic}|${number}`,
       };
     }
 
     return {
       title: `${topic}: факт ${number}`,
       body:
-        `Идея про "${topic}": выбери один маленький вопрос и найди ответ сегодня. Так интерес превращается в знание.${suffix}`,
+        `[Mock ${number}] Тестовый ответ по теме "${topic}". Настрой AI-провайдер, чтобы получить настоящий образовательный факт.${suffix}`,
+      key: `mock|${topic}|${number}`,
     };
   });
 
@@ -213,6 +240,12 @@ export function makeMockFacts({
       return true;
     })
     .slice(0, count);
+}
+
+function mockFactsEnabled() {
+  return ['1', 'true'].includes(
+    String(process.env.ALLOW_MOCK_FACTS ?? '').trim().toLowerCase(),
+  );
 }
 
 function getAiProviderConfig() {
@@ -297,7 +330,7 @@ function makeProviderConfig({
   };
 }
 
-async function generateFactsWithAi({
+export async function generateFactsWithAi({
   provider,
   topic,
   language,
@@ -305,9 +338,74 @@ async function generateFactsWithAi({
   count,
   targetWords,
   excludedFacts,
+  fetchImpl = fetch,
+  attempts = maxGenerationAttempts,
 }) {
   const languageName = languageNames[language];
-  const candidateCount = Math.min(8, count + (excludedFacts.length > 0 ? 3 : 0));
+  const acceptedFacts = [];
+  const rejectedFacts = [];
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const remainingCount = count - acceptedFacts.length;
+    if (remainingCount <= 0) {
+      break;
+    }
+
+    // One spare candidate plus an on-demand retry keeps diversity without
+    // spending most of the provider token quota on discarded alternatives.
+    const candidateCount = Math.min(8, Math.max(2, remainingCount + 1));
+    const factsToAvoid = prioritizedAvoidedFacts(
+      excludedFacts,
+      acceptedFacts,
+      rejectedFacts,
+    );
+    const candidates = await requestAiCandidates({
+      provider,
+      topic,
+      language,
+      languageName,
+      lengthMode,
+      targetWords,
+      candidateCount,
+      factsToAvoid,
+      attempt,
+      fetchImpl,
+    });
+
+    for (const fact of candidates) {
+      if (isDuplicateFact(fact, [
+        ...excludedFacts,
+        ...acceptedFacts,
+      ])) {
+        rejectedFacts.push(fact);
+        continue;
+      }
+      acceptedFacts.push(fact);
+      if (acceptedFacts.length === count) {
+        break;
+      }
+    }
+  }
+
+  if (acceptedFacts.length === 0) {
+    throw new Error(`${provider.name} response did not include a new fact after ${attempts} attempts`);
+  }
+
+  return acceptedFacts.slice(0, count);
+}
+
+async function requestAiCandidates({
+  provider,
+  topic,
+  language,
+  languageName,
+  lengthMode,
+  targetWords,
+  candidateCount,
+  factsToAvoid,
+  attempt,
+  fetchImpl,
+}) {
   const requestBody = {
     model: provider.model,
     temperature: 0.9,
@@ -315,7 +413,7 @@ async function generateFactsWithAi({
       {
         role: 'system',
         content:
-          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"title":"...","body":"..."}]}. Do not wrap it in markdown. Do not give generic study advice; each item must contain a concrete fact about the topic. Every returned fact must be new and must not repeat the provided previous facts.',
+          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"key":"canonical subject|single claim in 2-6 English words","title":"...","body":"..."}]}. Do not wrap it in markdown. The key identifies the underlying claim, not its wording: paraphrases of one claim must have the same key. Do not give generic study advice; each item must contain a concrete fact about the topic. Every returned fact must be new and must not repeat or paraphrase the provided previous facts.',
       },
       {
         role: 'user',
@@ -325,12 +423,14 @@ async function generateFactsWithAi({
           `Length mode: ${lengthMode}`,
           `Target body length: about ${targetWords} words`,
           `Count: ${candidateCount}`,
+          `Novelty attempt: ${attempt} of ${maxGenerationAttempts}`,
           'Write every title and body in the requested language only.',
           'Each fact must be useful, specific, safe, and readable as a phone notification.',
           'Avoid templates like "ask one question", "learn more", or "check the answer"; include the actual fact.',
-          'Avoid repeating the same fact, idea, example, mechanism, statistic, or wording from the previous facts.',
-          excludedFacts.length > 0
-            ? `Previous facts to avoid:\n${formatExcludedFactsForPrompt(excludedFacts)}`
+          'Prefer a less obvious entity or subtopic instead of the most famous fact about a broad topic.',
+          'Avoid repeating the same claim, idea, example, mechanism, statistic, entity-property pair, or wording from the previous facts.',
+          factsToAvoid.length > 0
+            ? `Previous and rejected facts to avoid:\n${formatExcludedFactsForPrompt(factsToAvoid)}`
             : 'No previous facts were provided.',
         ].join('\n'),
       },
@@ -341,18 +441,23 @@ async function generateFactsWithAi({
     requestBody.response_format = { type: 'json_object' };
   }
 
-  const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+  const response = await fetchImpl(`${provider.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${provider.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(providerRequestTimeoutMs),
   });
 
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(`${provider.name} HTTP ${response.status}: ${details.slice(0, 300)}`);
+    throw new AiProviderHttpError(
+      provider.name,
+      response.status,
+      details.slice(0, 300),
+    );
   }
 
   const decoded = await response.json();
@@ -368,90 +473,57 @@ async function generateFactsWithAi({
 
   const facts = [];
   for (const rawFact of parsed.facts) {
+    const title = String(rawFact?.title ?? '').trim();
+    const body = String(rawFact?.body ?? '').trim();
+    const rawKey = String(rawFact?.key ?? '').trim();
     const fact = {
-      title: String(rawFact?.title ?? '').trim(),
-      body: String(rawFact?.body ?? '').trim(),
+      key: rawKey.slice(0, maxExcludedKeyLength),
+      title,
+      body,
     };
-    if (!fact.title || !fact.body) {
+    if (!fact.title || !fact.body ||
+        fact.title.length > maxExcludedTitleLength ||
+        fact.body.length > maxExcludedBodyLength) {
       continue;
     }
-    if (isDuplicateFact(fact, [...excludedFacts, ...facts])) {
+    if (isDuplicateFact(fact, facts)) {
       continue;
     }
     facts.push(fact);
-    if (facts.length === count) {
+    if (facts.length === candidateCount) {
       break;
     }
-  }
-
-  if (facts.length === 0) {
-    throw new Error(`${provider.name} response did not include usable facts`);
   }
 
   return facts;
 }
 
+function prioritizedAvoidedFacts(excludedFacts, acceptedFacts, rejectedFacts) {
+  const result = [];
+  for (const fact of [
+    ...rejectedFacts.slice(-12).reverse(),
+    ...acceptedFacts,
+    ...excludedFacts,
+  ]) {
+    if (!isDuplicateFact(fact, result)) {
+      result.push(fact);
+    }
+    if (result.length === maxExcludedFacts) {
+      break;
+    }
+  }
+  return result;
+}
+
 function formatExcludedFactsForPrompt(excludedFacts) {
   return excludedFacts
     .slice(0, maxExcludedFacts)
-    .map((fact, index) => (
-      `${index + 1}. Title: ${fact.title}\n   Body: ${fact.body}`
-    ))
+    .map((fact, index) => [
+      `${index + 1}. Key: ${fact.key || '(unknown)'}`,
+      `   Title: ${fact.title}`,
+      `   Body: ${fact.body.slice(0, 320)}`,
+    ].join('\n'))
     .join('\n');
-}
-
-function isDuplicateFact(candidate, existingFacts) {
-  const candidateFingerprint = factFingerprint(candidate.title, candidate.body);
-  if (!candidateFingerprint) {
-    return true;
-  }
-
-  const candidateTokens = tokenSet(candidate);
-  for (const existingFact of existingFacts) {
-    if (candidateFingerprint === factFingerprint(
-      existingFact.title,
-      existingFact.body,
-    )) {
-      return true;
-    }
-
-    const existingTokens = tokenSet(existingFact);
-    const minSize = Math.min(candidateTokens.size, existingTokens.size);
-    if (minSize < 6) {
-      continue;
-    }
-
-    let shared = 0;
-    for (const token of candidateTokens) {
-      if (existingTokens.has(token)) {
-        shared += 1;
-      }
-    }
-    if (shared / minSize >= 0.82) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function tokenSet(fact) {
-  return new Set(
-    factFingerprint(fact.title, fact.body)
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((token) => token.length > 2),
-  );
-}
-
-function factFingerprint(title, body) {
-  return normalizeText(`${title} ${body}`);
-}
-
-function normalizeText(value) {
-  return String(value ?? '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function parseJsonObject(content) {
@@ -465,6 +537,14 @@ function parseJsonObject(content) {
     }
 
     return JSON.parse(content.slice(start, end + 1));
+  }
+}
+
+export class AiProviderHttpError extends Error {
+  constructor(providerName, statusCode, details) {
+    super(`${providerName} HTTP ${statusCode}: ${details}`);
+    this.name = 'AiProviderHttpError';
+    this.statusCode = statusCode;
   }
 }
 
