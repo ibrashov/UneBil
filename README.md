@@ -64,7 +64,10 @@ npm install
 npm start
 ```
 
-Without an AI API key, the backend returns deterministic mock facts so the app can be tested locally.
+Without an AI API key, the backend returns `503` and the app shows an error. It never
+saves a placeholder as a learning fact. For an isolated backend test only, mock
+responses can be enabled explicitly with `ALLOW_MOCK_FACTS=true`; the Flutter app
+still rejects responses marked as `source: mock`.
 
 To use Cerebras AI generation, create `backend/.env` based on `backend/.env.example`:
 
@@ -74,6 +77,9 @@ CEREBRAS_API_KEY=your_key_here
 CEREBRAS_MODEL=gemma-4-31b
 npm start
 ```
+
+Restart the backend after changing `.env` or files under `backend/src`, because
+`npm start` does not use watch mode. Use `npm run dev` while editing the backend.
 
 OpenAI-compatible generation is still available with `AI_PROVIDER=openai` and `OPENAI_API_KEY`.
 

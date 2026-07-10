@@ -29,7 +29,8 @@ class TopicDetailScreen extends StatelessWidget {
         }
 
         final facts = controller.factsForTopic(topic.id);
-        final generating = controller.generatingTopicId == topic.id;
+        final generating = controller.isGeneratingTopic(topic.id);
+        final generationError = controller.generationErrorForTopic(topic.id);
 
         return Scaffold(
           appBar: AppBar(title: Text(topic.title)),
@@ -43,13 +44,15 @@ class TopicDetailScreen extends StatelessWidget {
                     '${controller.settings.length.label} · ${controller.settings.length.targetWords} слов',
                 generating: generating,
                 onGenerate: () async {
-                  final addedCount =
-                      await controller.generateFactsForTopic(topic.id);
+                  final addedCount = await controller.generateFactsForTopic(
+                    topic.id,
+                  );
                   if (!context.mounted) {
                     return;
                   }
 
-                  final message = controller.lastError ??
+                  final message =
+                      controller.generationErrorForTopic(topic.id) ??
                       (addedCount > 0
                           ? 'Готово: факт добавлен.'
                           : 'Backend вернул пустой ответ.');
@@ -58,9 +61,9 @@ class TopicDetailScreen extends StatelessWidget {
                     ..showSnackBar(SnackBar(content: Text(message)));
                 },
               ),
-              if (controller.lastError != null) ...[
+              if (generationError != null) ...[
                 const SizedBox(height: 12),
-                _ErrorBanner(message: controller.lastError!),
+                _ErrorBanner(message: generationError),
               ],
               const SizedBox(height: 16),
               if (facts.isEmpty)
@@ -150,7 +153,9 @@ class _TopicHeader extends StatelessWidget {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.auto_awesome),
-                label: Text(generating ? 'Генерируем...' : 'Сгенерировать факт'),
+                label: Text(
+                  generating ? 'Генерируем...' : 'Сгенерировать факт',
+                ),
               ),
             ),
           ],
