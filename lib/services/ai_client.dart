@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../models/app_language.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_length.dart';
+import 'fact_deduplicator.dart';
 import 'fact_generator.dart';
 
 class AiClient implements FactGenerator {
@@ -18,6 +19,8 @@ class AiClient implements FactGenerator {
 
   final http.Client _client;
   final String baseUrl;
+  final Map<String, List<GeneratedFact>> _factCache =
+      <String, List<GeneratedFact>>{};
 
   @override
   Future<List<GeneratedFact>> generateFacts({
@@ -34,7 +37,22 @@ class AiClient implements FactGenerator {
       );
     }
 
+    final cacheKey =
+        '${topic.trim().toLowerCase()}|${language.code}|${length.id}';
+    final cachedFacts = _takeCachedFacts(cacheKey, count, excludedFacts);
+    if (cachedFacts.length >= count) {
+      return cachedFacts;
+    }
+
     try {
+      final neededCount = count - cachedFacts.length;
+      // Cerebras currently allows only a few requests per minute. Fetching a
+      // six-card reservoir once lets six rapid one-card taps stay local.
+      final providerCount = neededCount < 6 ? 6 : neededCount;
+      final requestExclusions = <GeneratedFact>[
+        ...cachedFacts,
+        ...excludedFacts,
+      ].take(120).toList(growable: false);
       final uri = Uri.parse(
         '${trimmedBaseUrl.replaceAll(RegExp(r'/$'), '')}/api/generate-facts',
       );
@@ -46,22 +64,28 @@ class AiClient implements FactGenerator {
               'topic': topic,
               'language': language.code,
               'lengthMode': length.id,
-              'count': count,
-              if (excludedFacts.isNotEmpty)
-                'excludedFacts': excludedFacts
+              'count': providerCount,
+              if (requestExclusions.isNotEmpty)
+                'excludedFacts': requestExclusions
                     .map(
                       (fact) => <String, String>{
                         'title': fact.title,
                         'body': fact.body,
+                        if (fact.key.isNotEmpty) 'key': fact.key,
                       },
                     )
                     .toList(),
             }),
           )
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: 70));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final details = _backendErrorDetails(response.body);
+        if (response.statusCode == 429) {
+          throw const FactGenerationException(
+            'Достигнут минутный лимит AI. Подожди около минуты и попробуй снова — заглушка вместо факта не будет сохранена.',
+          );
+        }
         throw FactGenerationException(
           details.isEmpty
               ? 'Backend вернул ошибку ${response.statusCode}.'
@@ -103,14 +127,73 @@ class AiClient implements FactGenerator {
         );
       }
 
-      return facts;
+      final usableFacts = <GeneratedFact>[];
+      final alreadyUsed = <GeneratedFact>[...excludedFacts, ...cachedFacts];
+      for (final fact in facts) {
+        if (FactDeduplicator.containsDuplicate(fact, alreadyUsed)) {
+          continue;
+        }
+        usableFacts.add(fact);
+        alreadyUsed.add(fact);
+      }
+
+      final result = <GeneratedFact>[
+        ...cachedFacts,
+        ...usableFacts.take(neededCount),
+      ];
+      final unusedFacts = usableFacts.skip(neededCount).toList(growable: false);
+      if (unusedFacts.isNotEmpty) {
+        _factCache[cacheKey] = unusedFacts;
+      }
+      if (result.isEmpty) {
+        throw const FactGenerationException(
+          'Backend вернул только уже известные факты.',
+        );
+      }
+      return result;
     } on FactGenerationException {
+      if (cachedFacts.isNotEmpty) {
+        return cachedFacts;
+      }
       rethrow;
     } catch (_) {
+      if (cachedFacts.isNotEmpty) {
+        return cachedFacts;
+      }
       throw const FactGenerationException(
         'Backend недоступен. Запусти backend или проверь адрес API.',
       );
     }
+  }
+
+  List<GeneratedFact> _takeCachedFacts(
+    String cacheKey,
+    int count,
+    List<GeneratedFact> excludedFacts,
+  ) {
+    final cached = _factCache.remove(cacheKey);
+    if (cached == null || cached.isEmpty) {
+      return <GeneratedFact>[];
+    }
+
+    final selected = <GeneratedFact>[];
+    final remaining = <GeneratedFact>[];
+    final alreadyUsed = <GeneratedFact>[...excludedFacts];
+    for (final fact in cached) {
+      if (FactDeduplicator.containsDuplicate(fact, alreadyUsed)) {
+        continue;
+      }
+      if (selected.length < count) {
+        selected.add(fact);
+        alreadyUsed.add(fact);
+      } else {
+        remaining.add(fact);
+      }
+    }
+    if (remaining.isNotEmpty) {
+      _factCache[cacheKey] = remaining;
+    }
+    return selected;
   }
 
   String _backendErrorDetails(String body) {
