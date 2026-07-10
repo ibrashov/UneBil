@@ -8,6 +8,7 @@ import '../models/notification_length.dart';
 import '../models/notification_time.dart';
 import '../models/topic.dart';
 import 'fact_generator.dart';
+import 'fact_deduplicator.dart';
 import 'notification_scheduler.dart';
 import 'storage_service.dart';
 
@@ -28,15 +29,21 @@ class AppController extends ChangeNotifier {
   List<LearningFact> _facts = <LearningFact>[];
   AppSettings _settings = AppSettings.defaultSettings;
   bool _loading = true;
-  String? _generatingTopicId;
+  final Map<String, Future<int>> _generationTasks = <String, Future<int>>{};
+  final Map<String, String> _generationErrors = <String, String>{};
   String? _lastError;
 
   List<Topic> get topics => List.unmodifiable(_topics);
   List<LearningFact> get facts => List.unmodifiable(_facts);
   AppSettings get settings => _settings;
   bool get loading => _loading;
-  String? get generatingTopicId => _generatingTopicId;
+  String? get generatingTopicId => _generationTasks.keys.firstOrNull;
   String? get lastError => _lastError;
+
+  bool isGeneratingTopic(String topicId) =>
+      _generationTasks.containsKey(topicId);
+
+  String? generationErrorForTopic(String topicId) => _generationErrors[topicId];
 
   List<Topic> get enabledTopics =>
       _topics.where((topic) => topic.enabled).toList(growable: false);
@@ -45,8 +52,12 @@ class AppController extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     _topics = _storage.loadTopics();
-    _facts = _storage.loadFacts();
+    final cleanup = FactDeduplicator.cleanStoredFacts(_storage.loadFacts());
+    _facts = cleanup.facts;
     _settings = _storage.loadSettings();
+    if (cleanup.changed) {
+      await _storage.saveFacts(_facts);
+    }
     await _scheduler.initialize();
     await _rescheduleNotifications();
     _loading = false;
@@ -104,6 +115,7 @@ class AppController extends ChangeNotifier {
                   language: fact.language,
                   length: fact.length,
                   createdAt: fact.createdAt,
+                  key: fact.key,
                 )
               : fact,
         )
@@ -165,25 +177,53 @@ class AppController extends ChangeNotifier {
     String topicId, {
     int count = 1,
     bool silent = false,
-  }) async {
+  }) {
+    final runningTask = _generationTasks[topicId];
+    if (runningTask != null) {
+      return runningTask;
+    }
+
     final topic = _topics.where((topic) => topic.id == topicId).firstOrNull;
     if (topic == null) {
-      return 0;
+      return Future<int>.value(0);
     }
 
+    _generationErrors.remove(topicId);
     if (!silent) {
-      _generatingTopicId = topicId;
       _lastError = null;
-      notifyListeners();
     }
 
+    late final Future<int> task;
+    task =
+        _generateFactsForTopic(
+          topic,
+          language: _settings.language,
+          length: _settings.length,
+          count: count,
+        ).whenComplete(() {
+          if (identical(_generationTasks[topicId], task)) {
+            _generationTasks.remove(topicId);
+          }
+          notifyListeners();
+        });
+    _generationTasks[topicId] = task;
+    notifyListeners();
+    return task;
+  }
+
+  Future<int> _generateFactsForTopic(
+    Topic requestedTopic, {
+    required AppLanguage language,
+    required NotificationLength length,
+    required int count,
+  }) async {
     var addedCount = 0;
     try {
-      final excludedFacts = _excludedFactsFor(topic);
+      final excludedFacts = _excludedFactsFor(requestedTopic, language);
       final generated = await _factGenerator.generateFacts(
-        topic: topic.title,
-        language: _settings.language,
-        length: _settings.length,
+        topic: requestedTopic.title,
+        language: language,
+        length: length,
         count: count,
         excludedFacts: excludedFacts,
       );
@@ -191,37 +231,45 @@ class AppController extends ChangeNotifier {
         throw StateError('empty facts response');
       }
 
+      final currentTopic = _topics
+          .where((topic) => topic.id == requestedTopic.id)
+          .firstOrNull;
+      if (currentTopic == null || currentTopic.title != requestedTopic.title) {
+        return 0;
+      }
+
       final now = DateTime.now();
-      final usedFingerprints = excludedFacts
-          .map((fact) => _factFingerprint(fact.title, fact.body))
-          .where((fingerprint) => fingerprint.isNotEmpty)
-          .toSet();
+      final usedFacts = <GeneratedFact>[
+        ..._excludedFactsFor(currentTopic, language),
+      ];
       final newFacts = <LearningFact>[];
 
       for (final fact in generated) {
-        final fingerprint = _factFingerprint(fact.title, fact.body);
-        if (fingerprint.isEmpty || usedFingerprints.contains(fingerprint)) {
+        if (fact.title.trim().isEmpty ||
+            fact.body.trim().isEmpty ||
+            FactDeduplicator.containsDuplicate(fact, usedFacts)) {
           continue;
         }
 
-        usedFingerprints.add(fingerprint);
+        usedFacts.add(fact);
         newFacts.add(
           LearningFact(
-              id: _uuid.v4(),
-              topicId: topic.id,
-              topicTitle: topic.title,
-              title: fact.title,
-              body: fact.body,
-              language: _settings.language,
-              length: _settings.length,
-              createdAt: now,
-            ),
+            id: _uuid.v4(),
+            topicId: currentTopic.id,
+            topicTitle: currentTopic.title,
+            title: fact.title,
+            body: fact.body,
+            language: language,
+            length: length,
+            createdAt: now,
+            key: fact.key,
+          ),
         );
       }
 
       if (newFacts.isEmpty) {
         throw const FactGenerationException(
-          'AI вернул только уже сохраненные факты. Попробуй нажать генерацию еще раз.',
+          'AI не смог создать новый факт: все варианты уже есть в истории.',
         );
       }
 
@@ -229,16 +277,15 @@ class AppController extends ChangeNotifier {
       await _storage.saveFacts(_facts);
       await _rescheduleNotifications();
       addedCount = newFacts.length;
+      _generationErrors.remove(requestedTopic.id);
     } on FactGenerationException catch (error) {
+      _generationErrors[requestedTopic.id] = error.message;
       _lastError = error.message;
     } catch (_) {
-      _lastError =
+      final message =
           'Не удалось получить факт. Запусти backend или проверь AI-ключ.';
-    } finally {
-      if (!silent) {
-        _generatingTopicId = null;
-      }
-      notifyListeners();
+      _generationErrors[requestedTopic.id] = message;
+      _lastError = message;
     }
     return addedCount;
   }
@@ -279,26 +326,14 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  List<GeneratedFact> _excludedFactsFor(Topic topic) {
+  List<GeneratedFact> _excludedFactsFor(Topic topic, AppLanguage language) {
     return _facts
-        .where(
-          (fact) =>
-              fact.topicId == topic.id && fact.language == _settings.language,
-        )
+        .where((fact) => fact.topicId == topic.id && fact.language == language)
         .map(
-          (fact) => GeneratedFact(
-            title: fact.title,
-            body: fact.body,
-          ),
+          (fact) =>
+              GeneratedFact(title: fact.title, body: fact.body, key: fact.key),
         )
-        .take(30)
+        .take(120)
         .toList(growable: false);
-  }
-
-  String _factFingerprint(String title, String body) {
-    return '$title $body'
-        .toLowerCase()
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
   }
 }
