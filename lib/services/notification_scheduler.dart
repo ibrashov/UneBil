@@ -46,26 +46,19 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
   final planned = <PlannedFactNotification>[];
 
   for (final topic in topics.where((topic) => topic.enabled)) {
-    final topicFacts = facts
-        .where(
-          (fact) =>
-              fact.topicId == topic.id &&
-              fact.language == settings.language &&
-              fact.length == settings.length,
-        )
-        .toList()
-      ..sort((first, second) => first.createdAt.compareTo(second.createdAt));
+    final topicFacts = _notificationFactsForTopic(topic, settings, facts);
 
     if (topicFacts.isEmpty) {
       continue;
     }
 
     final interval = topic.notificationInterval.duration;
+    final firstScheduledAt = _nextScheduledAt(topic, now);
     for (var slot = 0; slot < notificationsPerTopic; slot += 1) {
-      final scheduledAt = now.add(interval * (slot + 1));
+      final scheduledAt = firstScheduledAt.add(interval * slot);
       final rotationIndex =
           (scheduledAt.millisecondsSinceEpoch ~/ interval.inMilliseconds) %
-              topicFacts.length;
+          topicFacts.length;
       final fact = topicFacts[rotationIndex];
       planned.add(
         PlannedFactNotification(
@@ -80,6 +73,41 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
   }
 
   return planned;
+}
+
+DateTime _nextScheduledAt(Topic topic, DateTime now) {
+  final interval = topic.notificationInterval.duration;
+  final anchor = topic.nextNotificationAt ?? now.add(interval);
+  if (anchor.isAfter(now)) {
+    return anchor;
+  }
+
+  final elapsedIntervals =
+      now.difference(anchor).inMilliseconds ~/ interval.inMilliseconds;
+  return anchor.add(interval * (elapsedIntervals + 1));
+}
+
+List<LearningFact> _notificationFactsForTopic(
+  Topic topic,
+  AppSettings settings,
+  List<LearningFact> facts,
+) {
+  final allTopicFacts = facts
+      .where((fact) => fact.topicId == topic.id)
+      .toList(growable: false);
+  final matchingFacts = allTopicFacts
+      .where(
+        (fact) =>
+            fact.language == settings.language &&
+            fact.length == settings.length,
+      )
+      .toList(growable: false);
+  final selectedFacts = matchingFacts.isNotEmpty
+      ? matchingFacts
+      : allTopicFacts;
+
+  return selectedFacts
+    ..sort((first, second) => first.createdAt.compareTo(second.createdAt));
 }
 
 abstract class FactNotificationScheduler {
@@ -103,9 +131,13 @@ class NotificationScheduler implements FactNotificationScheduler {
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   static const notificationsPerTopic = 12;
+  static const topicNotificationIdStart = 10000;
+  static const testNotificationId = 9000;
 
   final FlutterLocalNotificationsPlugin _plugin;
   bool _initialized = false;
+  bool _requestedExactAlarmPermission = false;
+  Future<void> _scheduleQueue = Future<void>.value();
 
   @override
   Future<void> initialize() async {
@@ -134,15 +166,34 @@ class NotificationScheduler implements FactNotificationScheduler {
     required AppSettings settings,
     required List<Topic> topics,
     required List<LearningFact> facts,
+  }) {
+    // Rescheduling can be triggered by app resume while an AI generation or a
+    // settings update is already rebuilding the queue. Keep cancellation and
+    // replacement atomic so an older refresh cannot erase a newer schedule.
+    final settingsSnapshot = settings;
+    final topicsSnapshot = List<Topic>.of(topics, growable: false);
+    final factsSnapshot = List<LearningFact>.of(facts, growable: false);
+    final operation = _scheduleQueue.then(
+      (_) => _scheduleFactsNow(
+        settings: settingsSnapshot,
+        topics: topicsSnapshot,
+        facts: factsSnapshot,
+      ),
+    );
+    _scheduleQueue = operation.catchError((Object _) {});
+    return operation;
+  }
+
+  Future<void> _scheduleFactsNow({
+    required AppSettings settings,
+    required List<Topic> topics,
+    required List<LearningFact> facts,
   }) async {
     if (kIsWeb) {
       return;
     }
     await initialize();
 
-    // Clear the old bounded queue first, so interval and topic changes cannot
-    // leave duplicate or disabled-topic notifications behind.
-    await _plugin.cancelAllPendingNotifications();
     if (!await _ensureNotificationsAllowed(requestPermission: false)) {
       return;
     }
@@ -153,16 +204,16 @@ class NotificationScheduler implements FactNotificationScheduler {
       facts: facts,
       now: tz.TZDateTime.now(tz.local),
     );
+
+    await _cancelPendingFactNotifications();
+    if (planned.isEmpty) {
+      return;
+    }
+
+    await _requestExactAlarmPermissionOnce();
+    final scheduleMode = await _androidScheduleMode();
     for (final notification in planned) {
-      await _plugin.zonedSchedule(
-        id: notification.id,
-        title: notification.title,
-        body: notification.body,
-        scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
-        notificationDetails: _notificationDetails,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: notification.topicId,
-      );
+      await _scheduleNotification(notification, scheduleMode: scheduleMode);
     }
   }
 
@@ -183,13 +234,44 @@ class NotificationScheduler implements FactNotificationScheduler {
       );
     }
 
-    await _plugin.show(
-      id: 9000,
-      title: _testTitle(settings.language),
-      body: _testBody(settings.language),
-      notificationDetails: _notificationDetails,
-      payload: 'test-notification',
+    final planned = buildIntervalNotificationPlan(
+      settings: settings,
+      topics: topics,
+      facts: facts,
+      now: tz.TZDateTime.now(tz.local),
+      notificationsPerTopic: 1,
     );
+    final factNotification = planned.firstOrNull;
+    final body = factNotification?.body ?? _testBody(settings.language);
+    await _requestExactAlarmPermissionOnce();
+    final scheduleMode = await _androidScheduleMode();
+    if (_androidPlugin != null &&
+        scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
+      throw const NotificationPermissionException(
+        'Разреши для UneBil "Будильники и напоминания", вернись в приложение и нажми проверку ещё раз.',
+      );
+    }
+    await _scheduleNotification(
+      PlannedFactNotification(
+        id: testNotificationId,
+        topicId: factNotification?.topicId ?? 'test-notification',
+        scheduledAt: tz.TZDateTime.now(
+          tz.local,
+        ).add(const Duration(seconds: 15)),
+        title: factNotification?.title ?? _testTitle(settings.language),
+        body: body,
+      ),
+      scheduleMode: scheduleMode,
+    );
+  }
+
+  Future<void> _cancelPendingFactNotifications() async {
+    final pending = await _plugin.pendingNotificationRequests();
+    for (final notification in pending) {
+      if (notification.id >= topicNotificationIdStart) {
+        await _plugin.cancel(id: notification.id);
+      }
+    }
   }
 
   Future<bool> _ensureNotificationsAllowed({
@@ -217,15 +299,72 @@ class NotificationScheduler implements FactNotificationScheduler {
         >();
   }
 
-  NotificationDetails get _notificationDetails => const NotificationDetails(
-    android: AndroidNotificationDetails(
-      'unebil_learning_facts',
-      'Learning facts',
-      channelDescription: 'Short learning facts for selected topics',
-      importance: Importance.high,
-      priority: Priority.high,
-    ),
-  );
+  Future<void> _scheduleNotification(
+    PlannedFactNotification notification, {
+    required AndroidScheduleMode scheduleMode,
+  }) async {
+    try {
+      await _plugin.zonedSchedule(
+        id: notification.id,
+        title: notification.title,
+        body: notification.body,
+        scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
+        notificationDetails: _notificationDetailsFor(notification.body),
+        androidScheduleMode: scheduleMode,
+        payload: notification.topicId,
+      );
+    } catch (_) {
+      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
+        rethrow;
+      }
+      await _plugin.zonedSchedule(
+        id: notification.id,
+        title: notification.title,
+        body: notification.body,
+        scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
+        notificationDetails: _notificationDetailsFor(notification.body),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        payload: notification.topicId,
+      );
+    }
+  }
+
+  Future<void> _requestExactAlarmPermissionOnce() async {
+    if (_requestedExactAlarmPermission) {
+      return;
+    }
+
+    final android = _androidPlugin;
+    if (android == null) {
+      return;
+    }
+
+    _requestedExactAlarmPermission = true;
+    final canScheduleExact = await android.canScheduleExactNotifications();
+    if (canScheduleExact == false) {
+      await android.requestExactAlarmsPermission();
+    }
+  }
+
+  Future<AndroidScheduleMode> _androidScheduleMode() async {
+    final canScheduleExact =
+        await _androidPlugin?.canScheduleExactNotifications() ?? true;
+    return canScheduleExact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
+  }
+
+  NotificationDetails _notificationDetailsFor(String body) =>
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'unebil_learning_facts',
+          'Learning facts',
+          channelDescription: 'Short learning facts for selected topics',
+          importance: Importance.high,
+          priority: Priority.high,
+          styleInformation: BigTextStyleInformation(body),
+        ),
+      );
 
   String _testTitle(AppLanguage language) {
     return switch (language) {
