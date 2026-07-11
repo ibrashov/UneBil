@@ -1,4 +1,6 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/app_language.dart';
@@ -12,7 +14,7 @@ import 'fact_deduplicator.dart';
 import 'notification_scheduler.dart';
 import 'storage_service.dart';
 
-class AppController extends ChangeNotifier {
+class AppController extends ChangeNotifier with WidgetsBindingObserver {
   AppController(
     this._storage,
     this._factGenerator,
@@ -33,7 +35,8 @@ class AppController extends ChangeNotifier {
   final Map<String, String> _generationErrors = <String, String>{};
   String? _lastError;
 
-  static const _notificationIdStart = 10000;
+  static const _notificationIdStart =
+      NotificationScheduler.topicNotificationIdStart;
   static const _notificationIdBlockSize =
       NotificationScheduler.notificationsPerTopic;
   static const _maximumNotificationBaseId =
@@ -79,6 +82,19 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_loading) {
+      unawaited(_rescheduleNotifications());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   List<LearningFact> factsForTopic(String topicId) {
     return _facts
         .where((fact) => fact.topicId == topicId)
@@ -105,10 +121,11 @@ class AppController extends ChangeNotifier {
         id,
         _topics.map((topic) => topic.notificationId).toSet(),
       ),
+      nextNotificationAt: DateTime.now().add(interval.duration),
     );
     _topics = <Topic>[topic, ..._topics];
     await _saveTopicsAndSchedule();
-    await generateFactsForTopic(topic.id, count: 3, silent: true);
+    await generateFactsForTopic(topic.id, count: 1, silent: true);
   }
 
   Future<void> renameTopic(String topicId, String title) {
@@ -134,14 +151,21 @@ class AppController extends ChangeNotifier {
     if (trimmed.isEmpty) {
       return;
     }
+    final now = DateTime.now();
 
-    _topics = _topics
-        .map(
-          (topic) => topic.id == topicId
-              ? topic.copyWith(title: trimmed, notificationInterval: interval)
-              : topic,
-        )
-        .toList();
+    _topics = _topics.map((topic) {
+      if (topic.id != topicId) {
+        return topic;
+      }
+      final intervalChanged = topic.notificationInterval != interval;
+      return topic.copyWith(
+        title: trimmed,
+        notificationInterval: interval,
+        nextNotificationAt: intervalChanged
+            ? now.add(interval.duration)
+            : topic.nextNotificationAt,
+      );
+    }).toList();
     _facts = _facts
         .map(
           (fact) => fact.topicId == topicId
@@ -164,12 +188,18 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> toggleTopic(String topicId, bool enabled) async {
-    _topics = _topics
-        .map(
-          (topic) =>
-              topic.id == topicId ? topic.copyWith(enabled: enabled) : topic,
-        )
-        .toList();
+    final now = DateTime.now();
+    _topics = _topics.map((topic) {
+      if (topic.id != topicId) {
+        return topic;
+      }
+      return topic.copyWith(
+        enabled: enabled,
+        nextNotificationAt: enabled && !topic.enabled
+            ? now.add(topic.notificationInterval.duration)
+            : topic.nextNotificationAt,
+      );
+    }).toList();
     await _saveTopicsAndSchedule();
   }
 
@@ -330,7 +360,7 @@ class AppController extends ChangeNotifier {
       return false;
     } catch (_) {
       _lastError =
-          'Не удалось показать тестовое уведомление. Проверь разрешения Android.';
+          'Не удалось запланировать тестовый факт. Проверь уведомления и разрешение точных будильников Android.';
       notifyListeners();
       return false;
     }
@@ -354,6 +384,7 @@ class AppController extends ChangeNotifier {
     List<Topic> topics,
   ) {
     final usedIds = <int>{};
+    final now = DateTime.now();
     var changed = false;
     final normalized = <Topic>[];
 
@@ -364,10 +395,20 @@ class AppController extends ChangeNotifier {
         changed = true;
       }
       usedIds.add(notificationId);
+      final nextNotificationAt =
+          topic.nextNotificationAt ??
+          now.add(topic.notificationInterval.duration);
+      if (topic.nextNotificationAt == null) {
+        changed = true;
+      }
       normalized.add(
-        notificationId == topic.notificationId
+        notificationId == topic.notificationId &&
+                nextNotificationAt == topic.nextNotificationAt
             ? topic
-            : topic.copyWith(notificationId: notificationId),
+            : topic.copyWith(
+                notificationId: notificationId,
+                nextNotificationAt: nextNotificationAt,
+              ),
       );
     }
     return (topics: normalized, changed: changed);

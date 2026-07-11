@@ -31,7 +31,7 @@ void main() {
     expect(controller.topics.single.title, 'Космос');
     expect(controller.topics.single.enabled, isTrue);
     expect(fakeGenerator.calls, 1);
-    expect(controller.factsForTopic(controller.topics.single.id), hasLength(3));
+    expect(controller.factsForTopic(controller.topics.single.id), hasLength(1));
 
     await controller.toggleTopic(controller.topics.single.id, false);
     expect(controller.topics.single.enabled, isFalse);
@@ -66,13 +66,19 @@ void main() {
       final topic = controller.topics.single;
       expect(topic.notificationInterval, NotificationInterval.everyTwoHours);
       expect(topic.notificationId, greaterThanOrEqualTo(10000));
+      expect(topic.nextNotificationAt, isNotNull);
       final saved = StorageService(prefs).loadTopics().single;
       expect(saved.notificationInterval, NotificationInterval.everyTwoHours);
       expect(saved.notificationId, topic.notificationId);
+      expect(saved.nextNotificationAt, topic.nextNotificationAt);
     },
   );
 
   test('interval labels are available in every supported language', () {
+    expect(
+      NotificationInterval.selectorLabel(AppLanguage.en),
+      'Notification interval',
+    );
     expect(NotificationInterval.hourly.label(AppLanguage.ru), 'Каждый час');
     expect(
       NotificationInterval.everyTwoHours.label(AppLanguage.kk),
@@ -134,6 +140,66 @@ void main() {
     );
     expect(plan[0].title, isNot(plan[1].title));
     expect(plan[0].title, plan[2].title);
+
+    final anchoredTopic = topic.copyWith(
+      nextNotificationAt: DateTime.utc(2026, 7, 10, 0, 30),
+    );
+    final anchoredPlan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+      ),
+      topics: <Topic>[anchoredTopic],
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10),
+      notificationsPerTopic: 2,
+    );
+    expect(anchoredPlan.first.scheduledAt, DateTime.utc(2026, 7, 10, 0, 30));
+
+    final resumedPlan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+      ),
+      topics: <Topic>[anchoredTopic],
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10, 3, 35),
+      notificationsPerTopic: 1,
+    );
+    expect(resumedPlan.single.scheduledAt, DateTime.utc(2026, 7, 10, 4, 30));
+
+    final fallbackPlan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.ru,
+        length: NotificationLength.detailed,
+      ),
+      topics: <Topic>[topic],
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10),
+      notificationsPerTopic: 1,
+    );
+    expect(fallbackPlan, hasLength(1));
+    expect(fallbackPlan.single.title, anyOf('First fact', 'Second fact'));
+
+    for (final interval in <NotificationInterval>[
+      NotificationInterval.everyTwoHours,
+      NotificationInterval.everyThreeHours,
+    ]) {
+      final intervalPlan = buildIntervalNotificationPlan(
+        settings: const AppSettings(
+          language: AppLanguage.en,
+          length: NotificationLength.medium,
+        ),
+        topics: <Topic>[topic.copyWith(notificationInterval: interval)],
+        facts: facts,
+        now: DateTime.utc(2026, 7, 10),
+        notificationsPerTopic: 2,
+      );
+      expect(
+        intervalPlan[1].scheduledAt.difference(intervalPlan[0].scheduledAt),
+        interval.duration,
+      );
+    }
   });
 
   test('generates against previous facts and skips duplicate responses', () async {
