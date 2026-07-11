@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../models/app_language.dart';
 import '../models/notification_length.dart';
-import '../models/notification_time.dart';
 import '../services/app_controller.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -65,52 +64,13 @@ class SettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _SettingsCard(
-                title: 'Время уведомлений',
-                child: Column(
-                  children: [
-                    if (settings.notificationTimes.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 12),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text('Уведомления не запланированы'),
-                        ),
-                      )
-                    else
-                      ...settings.notificationTimes.map(
-                        (time) => ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.schedule),
-                          title: Text(time.label),
-                          trailing: IconButton(
-                            tooltip: 'Удалить время',
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () {
-                              controller.removeNotificationTime(time);
-                            },
-                          ),
-                        ),
-                      ),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () => _pickTime(context, controller),
-                        icon: const Icon(Icons.add_alarm),
-                        label: const Text('Добавить время'),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _SettingsCard(
-                title: 'Проверка уведомлений',
+                title: 'Проверка расписания',
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.tonalIcon(
                     onPressed: () => _sendTestNotification(context, controller),
                     icon: const Icon(Icons.notifications_active_outlined),
-                    label: const Text('Показать тестовое уведомление'),
+                    label: const Text('Запланировать факт через 15 секунд'),
                   ),
                 ),
               ),
@@ -146,24 +106,6 @@ class _SettingsCard extends StatelessWidget {
   }
 }
 
-Future<void> _pickTime(BuildContext context, AppController controller) async {
-  final now = TimeOfDay.now();
-  final picked = await showTimePicker(
-    context: context,
-    initialTime: now,
-    helpText: 'Выбери время',
-    cancelText: 'Отмена',
-    confirmText: 'Готово',
-  );
-  if (picked == null) {
-    return;
-  }
-
-  await controller.addNotificationTime(
-    NotificationTime(hour: picked.hour, minute: picked.minute),
-  );
-}
-
 Future<void> _sendTestNotification(
   BuildContext context,
   AppController controller,
@@ -174,7 +116,7 @@ Future<void> _sendTestNotification(
   }
 
   final message = delivered
-      ? 'Тестовое уведомление отправлено. Если его не видно, разреши уведомления для UneBil.'
+      ? 'Факт запланирован через 15 секунд. Закрой приложение и подожди.'
       : controller.lastError ?? 'Не удалось показать тестовое уведомление.';
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
