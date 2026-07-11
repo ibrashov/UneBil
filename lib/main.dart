@@ -16,6 +16,7 @@ Future<void> main() async {
     AiClient(),
     NotificationScheduler(),
   );
+  WidgetsBinding.instance.addObserver(controller);
   await controller.load();
 
   runApp(UneBilApp(controller: controller));

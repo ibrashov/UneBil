@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../models/app_language.dart';
+import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
 import 'settings_screen.dart';
@@ -61,8 +63,8 @@ class _HomeContent extends StatelessWidget {
       children: [
         _SettingsSummary(
           language: settings.language.label,
-          length: '${settings.length.label} · ${settings.length.targetWords} слов',
-          times: settings.notificationTimes.map((time) => time.label).join(', '),
+          length:
+              '${settings.length.label} · ${settings.length.targetWords} слов',
         ),
         const SizedBox(height: 16),
         if (topics.isEmpty)
@@ -74,6 +76,9 @@ class _HomeContent extends StatelessWidget {
               child: _TopicTile(
                 topic: topic,
                 factCount: controller.factsForTopic(topic.id).length,
+                intervalLabel: topic.notificationInterval.label(
+                  settings.language,
+                ),
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -84,12 +89,10 @@ class _HomeContent extends StatelessWidget {
                     ),
                   );
                 },
-                onToggle: (enabled) => controller.toggleTopic(topic.id, enabled),
-                onEdit: () => _showTopicDialog(
-                  context,
-                  controller,
-                  existingTopic: topic,
-                ),
+                onToggle: (enabled) =>
+                    controller.toggleTopic(topic.id, enabled),
+                onEdit: () =>
+                    _showTopicDialog(context, controller, existingTopic: topic),
                 onDelete: () => controller.deleteTopic(topic.id),
               ),
             ),
@@ -100,15 +103,10 @@ class _HomeContent extends StatelessWidget {
 }
 
 class _SettingsSummary extends StatelessWidget {
-  const _SettingsSummary({
-    required this.language,
-    required this.length,
-    required this.times,
-  });
+  const _SettingsSummary({required this.language, required this.length});
 
   final String language;
   final String length;
-  final String times;
 
   @override
   Widget build(BuildContext context) {
@@ -129,10 +127,6 @@ class _SettingsSummary extends StatelessWidget {
               children: [
                 _InfoChip(icon: Icons.language, label: language),
                 _InfoChip(icon: Icons.short_text, label: length),
-                _InfoChip(
-                  icon: Icons.notifications_active_outlined,
-                  label: times.isEmpty ? 'Нет времени' : times,
-                ),
               ],
             ),
           ],
@@ -202,6 +196,7 @@ class _TopicTile extends StatelessWidget {
   const _TopicTile({
     required this.topic,
     required this.factCount,
+    required this.intervalLabel,
     required this.onTap,
     required this.onToggle,
     required this.onEdit,
@@ -210,6 +205,7 @@ class _TopicTile extends StatelessWidget {
 
   final Topic topic;
   final int factCount;
+  final String intervalLabel;
   final VoidCallback onTap;
   final ValueChanged<bool> onToggle;
   final VoidCallback onEdit;
@@ -221,20 +217,13 @@ class _TopicTile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-        title: Text(
-          topic.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        title: Text(topic.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           topic.enabled
-              ? '$factCount фактов · уведомления включены'
+              ? '$factCount фактов · $intervalLabel'
               : '$factCount фактов · уведомления выключены',
         ),
-        leading: Switch(
-          value: topic.enabled,
-          onChanged: onToggle,
-        ),
+        leading: Switch(value: topic.enabled, onChanged: onToggle),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           onSelected: (value) {
@@ -245,14 +234,8 @@ class _TopicTile extends StatelessWidget {
             }
           },
           itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: 'edit',
-              child: Text('Переименовать'),
-            ),
-            PopupMenuItem(
-              value: 'delete',
-              child: Text('Удалить'),
-            ),
+            PopupMenuItem(value: 'edit', child: Text('Переименовать')),
+            PopupMenuItem(value: 'delete', child: Text('Удалить')),
           ],
         ),
       ),
@@ -265,25 +248,39 @@ Future<void> _showTopicDialog(
   AppController controller, {
   Topic? existingTopic,
 }) async {
-  final value = await showDialog<String>(
+  final value = await showDialog<_TopicDraft>(
     context: context,
-    builder: (_) => _TopicDialog(initialTitle: existingTopic?.title),
+    builder: (_) => _TopicDialog(
+      initialTitle: existingTopic?.title,
+      initialInterval: existingTopic?.notificationInterval,
+      language: controller.settings.language,
+    ),
   );
 
-  if (value == null || value.isEmpty) {
+  if (value == null || value.title.isEmpty) {
     return;
   }
   if (existingTopic == null) {
-    await controller.addTopic(value);
+    await controller.addTopic(value.title, interval: value.interval);
   } else {
-    await controller.renameTopic(existingTopic.id, value);
+    await controller.updateTopic(
+      existingTopic.id,
+      title: value.title,
+      interval: value.interval,
+    );
   }
 }
 
 class _TopicDialog extends StatefulWidget {
-  const _TopicDialog({this.initialTitle});
+  const _TopicDialog({
+    this.initialTitle,
+    this.initialInterval,
+    required this.language,
+  });
 
   final String? initialTitle;
+  final NotificationInterval? initialInterval;
+  final AppLanguage language;
 
   @override
   State<_TopicDialog> createState() => _TopicDialogState();
@@ -291,11 +288,13 @@ class _TopicDialog extends StatefulWidget {
 
 class _TopicDialogState extends State<_TopicDialog> {
   late final TextEditingController _textController;
+  late NotificationInterval _interval;
 
   @override
   void initState() {
     super.initState();
     _textController = TextEditingController(text: widget.initialTitle ?? '');
+    _interval = widget.initialInterval ?? NotificationInterval.everyTwoHours;
   }
 
   @override
@@ -312,30 +311,62 @@ class _TopicDialogState extends State<_TopicDialog> {
 
     return AlertDialog(
       title: Text(title),
-      content: TextField(
-        controller: _textController,
-        autofocus: true,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: const InputDecoration(
-          labelText: 'Тема',
-          hintText: 'Например: космос',
-        ),
-        onSubmitted: (_) => _submit(),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _textController,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Тема',
+              hintText: 'Например: космос',
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<NotificationInterval>(
+            initialValue: _interval,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: NotificationInterval.selectorLabel(widget.language),
+            ),
+            items: NotificationInterval.values
+                .map(
+                  (interval) => DropdownMenuItem<NotificationInterval>(
+                    value: interval,
+                    child: Text(interval.label(widget.language)),
+                  ),
+                )
+                .toList(),
+            onChanged: (interval) {
+              if (interval != null) {
+                setState(() => _interval = interval);
+              }
+            },
+          ),
+        ],
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Отмена'),
         ),
-        FilledButton(
-          onPressed: _submit,
-          child: Text(action),
-        ),
+        FilledButton(onPressed: _submit, child: Text(action)),
       ],
     );
   }
 
   void _submit() {
-    Navigator.of(context).pop(_textController.text.trim());
+    Navigator.of(
+      context,
+    ).pop(_TopicDraft(title: _textController.text.trim(), interval: _interval));
   }
+}
+
+class _TopicDraft {
+  const _TopicDraft({required this.title, required this.interval});
+
+  final String title;
+  final NotificationInterval interval;
 }

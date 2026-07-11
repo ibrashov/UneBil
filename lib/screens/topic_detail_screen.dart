@@ -42,6 +42,9 @@ class TopicDetailScreen extends StatelessWidget {
                 language: controller.settings.language.label,
                 length:
                     '${controller.settings.length.label} · ${controller.settings.length.targetWords} слов',
+                interval: topic.notificationInterval.label(
+                  controller.settings.language,
+                ),
                 generating: generating,
                 onGenerate: () async {
                   final addedCount = await controller.generateFactsForTopic(
@@ -108,6 +111,7 @@ class _TopicHeader extends StatelessWidget {
     required this.topic,
     required this.language,
     required this.length,
+    required this.interval,
     required this.generating,
     required this.onGenerate,
   });
@@ -115,6 +119,7 @@ class _TopicHeader extends StatelessWidget {
   final Topic topic;
   final String language;
   final String length;
+  final String interval;
   final bool generating;
   final VoidCallback onGenerate;
 
@@ -139,6 +144,13 @@ class _TopicHeader extends StatelessWidget {
                 Chip(
                   avatar: const Icon(Icons.short_text, size: 18),
                   label: Text(length),
+                ),
+                Chip(
+                  avatar: const Icon(
+                    Icons.notifications_active_outlined,
+                    size: 18,
+                  ),
+                  label: Text(interval),
                 ),
               ],
             ),

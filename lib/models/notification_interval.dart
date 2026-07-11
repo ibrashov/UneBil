@@ -12,6 +12,14 @@ enum NotificationInterval {
 
   Duration get duration => Duration(hours: hours);
 
+  static String selectorLabel(AppLanguage language) {
+    return switch (language) {
+      AppLanguage.ru => 'Интервал уведомлений',
+      AppLanguage.kk => 'Ескертулер аралығы',
+      AppLanguage.en => 'Notification interval',
+    };
+  }
+
   String label(AppLanguage language) {
     return switch (language) {
       AppLanguage.ru => switch (this) {

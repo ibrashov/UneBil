@@ -1,7 +1,7 @@
 # UneBil
 
 UneBil is an Android-first Flutter MVP that turns phone time into small learning moments.
-Users add topics they are curious about, choose the language and notification length, set exact daily times, and receive short learning facts as local notifications.
+Users add topics they are curious about, choose the language and notification length, select a per-topic notification interval, and receive short learning facts as local notifications.
 
 For a detailed Russian explanation of every important file, read:
 
@@ -15,7 +15,7 @@ README_FOR_ANUAR.md
 - Generate facts for any topic through a backend AI proxy.
 - Choose fact language: Russian, Kazakh, or English.
 - Choose notification length: short, medium, or detailed.
-- Schedule local daily notifications at exact times.
+- Choose a per-topic interval: every 1, 2, or 3 hours.
 - Store topics, settings, and cached facts locally on the phone.
 
 ## Flutter App
