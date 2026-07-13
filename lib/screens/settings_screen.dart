@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/app_language.dart';
+import '../models/app_time_zone.dart';
 import '../models/notification_length.dart';
 import '../services/app_controller.dart';
 
@@ -34,6 +35,30 @@ class SettingsScreen extends StatelessWidget {
                   selected: <AppLanguage>{settings.language},
                   onSelectionChanged: (selection) {
                     controller.updateLanguage(selection.first);
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsCard(
+                title: 'Time zone',
+                child: DropdownButtonFormField<AppTimeZone>(
+                  initialValue: settings.timeZone,
+                  decoration: const InputDecoration(
+                    labelText: 'Country',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: AppTimeZone.values
+                      .map(
+                        (timeZone) => DropdownMenuItem<AppTimeZone>(
+                          value: timeZone,
+                          child: Text(timeZone.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (timeZone) {
+                    if (timeZone != null) {
+                      controller.updateTimeZone(timeZone);
+                    }
                   },
                 ),
               ),
