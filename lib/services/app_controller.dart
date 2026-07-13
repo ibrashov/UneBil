@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
+import '../models/app_time_zone.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_interval.dart';
 import '../models/notification_length.dart';
@@ -218,6 +219,10 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> updateLength(NotificationLength length) {
     return updateSettings(_settings.copyWith(length: length));
+  }
+
+  Future<void> updateTimeZone(AppTimeZone timeZone) {
+    return updateSettings(_settings.copyWith(timeZone: timeZone));
   }
 
   Future<void> updateSettings(AppSettings settings) async {

@@ -140,6 +140,7 @@ void main() {
     );
     expect(plan[0].title, isNot(plan[1].title));
     expect(plan[0].title, plan[2].title);
+    expect(<String>{plan[0].factId, plan[1].factId}, <String>{'first', 'second'});
 
     final anchoredTopic = topic.copyWith(
       nextNotificationAt: DateTime.utc(2026, 7, 10, 0, 30),
@@ -200,6 +201,16 @@ void main() {
         interval.duration,
       );
     }
+  });
+
+  test('notification payload preserves the exact fact destination', () {
+    const target = NotificationTarget(topicId: 'space', factId: 'fact-42');
+
+    final decoded = NotificationTarget.tryParse(target.toPayload());
+
+    expect(decoded?.topicId, 'space');
+    expect(decoded?.factId, 'fact-42');
+    expect(NotificationTarget.tryParse('legacy-topic-id'), isNull);
   });
 
   test('generates against previous facts and skips duplicate responses', () async {
