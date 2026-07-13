@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -18,10 +21,44 @@ class NotificationPermissionException implements Exception {
   String toString() => message;
 }
 
+class NotificationTarget {
+  const NotificationTarget({required this.topicId, required this.factId});
+
+  final String topicId;
+  final String factId;
+
+  String toPayload() => jsonEncode(<String, String>{
+    'topicId': topicId,
+    'factId': factId,
+  });
+
+  static NotificationTarget? tryParse(String? payload) {
+    if (payload == null || payload.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+      final topicId = decoded['topicId'];
+      final factId = decoded['factId'];
+      if (topicId is! String || factId is! String || factId.isEmpty) {
+        return null;
+      }
+      return NotificationTarget(topicId: topicId, factId: factId);
+    } catch (_) {
+      // Notifications scheduled by older versions used a plain topic ID.
+      return null;
+    }
+  }
+}
+
 class PlannedFactNotification {
   const PlannedFactNotification({
     required this.id,
     required this.topicId,
+    required this.factId,
     required this.scheduledAt,
     required this.title,
     required this.body,
@@ -29,6 +66,7 @@ class PlannedFactNotification {
 
   final int id;
   final String topicId;
+  final String factId;
   final DateTime scheduledAt;
   final String title;
   final String body;
@@ -64,6 +102,7 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
         PlannedFactNotification(
           id: topic.notificationId + slot,
           topicId: topic.id,
+          factId: fact.id,
           scheduledAt: scheduledAt,
           title: fact.title,
           body: fact.body,
@@ -135,6 +174,8 @@ class NotificationScheduler implements FactNotificationScheduler {
   static const testNotificationId = 9000;
 
   final FlutterLocalNotificationsPlugin _plugin;
+  final StreamController<NotificationTarget> _notificationTaps =
+      StreamController<NotificationTarget>.broadcast(sync: true);
   bool _initialized = false;
   bool _requestedExactAlarmPermission = false;
   Future<void> _scheduleQueue = Future<void>.value();
@@ -156,7 +197,15 @@ class NotificationScheduler implements FactNotificationScheduler {
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     );
-    await _plugin.initialize(settings: settings);
+    await _plugin.initialize(
+      settings: settings,
+      onDidReceiveNotificationResponse: (response) {
+        final target = NotificationTarget.tryParse(response.payload);
+        if (target != null) {
+          _notificationTaps.add(target);
+        }
+      },
+    );
     _initialized = true;
     await _ensureNotificationsAllowed(requestPermission: true);
   }
@@ -193,6 +242,7 @@ class NotificationScheduler implements FactNotificationScheduler {
       return;
     }
     await initialize();
+    _useTimeZone(settings);
 
     if (!await _ensureNotificationsAllowed(requestPermission: false)) {
       return;
@@ -217,6 +267,20 @@ class NotificationScheduler implements FactNotificationScheduler {
     }
   }
 
+  Stream<NotificationTarget> get notificationTaps =>
+      _notificationTaps.stream;
+
+  Future<NotificationTarget?> get launchNotification async {
+    if (kIsWeb) {
+      return null;
+    }
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    if (details?.didNotificationLaunchApp != true) {
+      return null;
+    }
+    return NotificationTarget.tryParse(details?.notificationResponse?.payload);
+  }
+
   @override
   Future<void> showTestNotification({
     required AppSettings settings,
@@ -227,6 +291,7 @@ class NotificationScheduler implements FactNotificationScheduler {
       return;
     }
     await initialize();
+    _useTimeZone(settings);
 
     if (!await _ensureNotificationsAllowed(requestPermission: false)) {
       throw const NotificationPermissionException(
@@ -255,6 +320,7 @@ class NotificationScheduler implements FactNotificationScheduler {
       PlannedFactNotification(
         id: testNotificationId,
         topicId: factNotification?.topicId ?? 'test-notification',
+        factId: factNotification?.factId ?? '',
         scheduledAt: tz.TZDateTime.now(
           tz.local,
         ).add(const Duration(seconds: 15)),
@@ -272,6 +338,10 @@ class NotificationScheduler implements FactNotificationScheduler {
         await _plugin.cancel(id: notification.id);
       }
     }
+  }
+
+  void _useTimeZone(AppSettings settings) {
+    tz.setLocalLocation(tz.getLocation(settings.timeZone.locationName));
   }
 
   Future<bool> _ensureNotificationsAllowed({
@@ -311,7 +381,10 @@ class NotificationScheduler implements FactNotificationScheduler {
         scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
         notificationDetails: _notificationDetailsFor(notification.body),
         androidScheduleMode: scheduleMode,
-        payload: notification.topicId,
+        payload: NotificationTarget(
+          topicId: notification.topicId,
+          factId: notification.factId,
+        ).toPayload(),
       );
     } catch (_) {
       if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
@@ -324,7 +397,10 @@ class NotificationScheduler implements FactNotificationScheduler {
         scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
         notificationDetails: _notificationDetailsFor(notification.body),
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: notification.topicId,
+        payload: NotificationTarget(
+          topicId: notification.topicId,
+          factId: notification.factId,
+        ).toPayload(),
       );
     }
   }
