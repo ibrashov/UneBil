@@ -234,7 +234,10 @@ class _TopicTile extends StatelessWidget {
             }
           },
           itemBuilder: (context) => const [
-            PopupMenuItem(value: 'edit', child: Text('Переименовать')),
+            PopupMenuItem(
+              value: 'edit',
+              child: Text('Изменить тему и интервал'),
+            ),
             PopupMenuItem(value: 'delete', child: Text('Удалить')),
           ],
         ),
@@ -306,7 +309,7 @@ class _TopicDialogState extends State<_TopicDialog> {
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.initialTitle != null;
-    final title = isEditing ? 'Переименовать тему' : 'Новая тема';
+    final title = isEditing ? 'Изменить тему и интервал' : 'Новая тема';
     final action = isEditing ? 'Сохранить' : 'Добавить';
 
     return AlertDialog(
