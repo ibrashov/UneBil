@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unebil/main.dart';
+import 'package:unebil/models/notification_interval.dart';
 
 import 'app_controller_test.dart';
 
@@ -42,5 +43,29 @@ void main() {
 
     expect(controller.settings.language.label, 'Қазақша');
     expect(controller.settings.length.targetWords, 70);
+  });
+
+  testWidgets('changes interval on topic screen and shows fact schedule', (
+    tester,
+  ) async {
+    final controller = await createController();
+    await controller.addTopic('Космос');
+
+    await tester.pumpWidget(UneBilApp(controller: controller));
+    await tester.tap(find.text('Космос'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Как часто показывать уведомления'), findsOneWidget);
+    expect(find.textContaining('Следующее уведомление:'), findsOneWidget);
+
+    await tester.tap(find.text('Каждые 2 часа').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Каждый час').last);
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.topics.single.notificationInterval,
+      NotificationInterval.hourly,
+    );
   });
 }
