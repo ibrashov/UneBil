@@ -102,6 +102,22 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
         .toList(growable: false);
   }
 
+  /// Returns the same upcoming queue that is sent to Android notifications.
+  /// The UI uses it to show when each cached fact will appear next.
+  List<PlannedFactNotification> notificationPlanForTopic(
+    String topicId, {
+    DateTime? now,
+  }) {
+    return buildIntervalNotificationPlan(
+      settings: _settings,
+      topics: _topics
+          .where((topic) => topic.id == topicId)
+          .toList(growable: false),
+      facts: _facts,
+      now: now ?? DateTime.now(),
+    );
+  }
+
   Future<void> addTopic(
     String title, {
     NotificationInterval interval = NotificationInterval.everyTwoHours,
@@ -141,6 +157,19 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       title: title,
       interval: topic.notificationInterval,
     );
+  }
+
+  Future<void> updateTopicInterval(
+    String topicId,
+    NotificationInterval interval,
+  ) {
+    final topic = _topics
+        .where((candidate) => candidate.id == topicId)
+        .firstOrNull;
+    if (topic == null || topic.notificationInterval == interval) {
+      return Future<void>.value();
+    }
+    return updateTopic(topicId, title: topic.title, interval: interval);
   }
 
   Future<void> updateTopic(

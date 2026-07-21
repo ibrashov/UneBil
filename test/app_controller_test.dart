@@ -519,6 +519,27 @@ void main() {
     },
   );
 
+  test('exposes the real upcoming notification queue for a topic', () async {
+    final controller = await createController();
+    await controller.addTopic(
+      'Space',
+      interval: NotificationInterval.everyTwoHours,
+    );
+    final topic = controller.topics.single;
+    final fact = controller.factsForTopic(topic.id).single;
+    final now = topic.nextNotificationAt!.subtract(const Duration(minutes: 1));
+
+    final plan = controller.notificationPlanForTopic(topic.id, now: now);
+
+    expect(plan, hasLength(NotificationScheduler.notificationsPerTopic));
+    expect(plan.first.factId, fact.id);
+    expect(plan.first.scheduledAt, topic.nextNotificationAt);
+    expect(
+      plan[1].scheduledAt.difference(plan.first.scheduledAt),
+      NotificationInterval.everyTwoHours.duration,
+    );
+  });
+
   test('shows a test notification through scheduler', () async {
     final scheduler = RecordingScheduler();
     final controller = await createController(scheduler: scheduler);
