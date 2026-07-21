@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 
+import '../models/app_language.dart';
+import '../models/app_time_zone.dart';
+import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
 
@@ -29,6 +34,14 @@ class TopicDetailScreen extends StatelessWidget {
         }
 
         final facts = controller.factsForTopic(topic.id);
+        final notificationPlan = controller.notificationPlanForTopic(topic.id);
+        final nextNotificationByFact = <String, DateTime>{};
+        for (final notification in notificationPlan) {
+          nextNotificationByFact.putIfAbsent(
+            notification.factId,
+            () => notification.scheduledAt,
+          );
+        }
         final generating = controller.isGeneratingTopic(topic.id);
         final generationError = controller.generationErrorForTopic(topic.id);
 
@@ -45,6 +58,11 @@ class TopicDetailScreen extends StatelessWidget {
                 interval: topic.notificationInterval.label(
                   controller.settings.language,
                 ),
+                selectedInterval: topic.notificationInterval,
+                intervalLanguage: controller.settings.language,
+                onIntervalChanged: (interval) {
+                  controller.updateTopicInterval(topic.id, interval);
+                },
                 generating: generating,
                 onGenerate: () async {
                   final addedCount = await controller.generateFactsForTopic(
@@ -92,6 +110,12 @@ class TopicDetailScreen extends StatelessWidget {
                               '${fact.language.label} · ${fact.length.label}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
+                            const SizedBox(height: 8),
+                            _NotificationSchedule(
+                              enabled: topic.enabled,
+                              scheduledAt: nextNotificationByFact[fact.id],
+                              timeZone: controller.settings.timeZone,
+                            ),
                           ],
                         ),
                       ),
@@ -112,6 +136,9 @@ class _TopicHeader extends StatelessWidget {
     required this.language,
     required this.length,
     required this.interval,
+    required this.selectedInterval,
+    required this.intervalLanguage,
+    required this.onIntervalChanged,
     required this.generating,
     required this.onGenerate,
   });
@@ -120,6 +147,9 @@ class _TopicHeader extends StatelessWidget {
   final String language;
   final String length;
   final String interval;
+  final NotificationInterval selectedInterval;
+  final AppLanguage intervalLanguage;
+  final ValueChanged<NotificationInterval> onIntervalChanged;
   final bool generating;
   final VoidCallback onGenerate;
 
@@ -155,6 +185,36 @@ class _TopicHeader extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
+            InputDecorator(
+              decoration: const InputDecoration(
+                labelText: 'Как часто показывать уведомления',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.schedule),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<NotificationInterval>(
+                  value: selectedInterval,
+                  isExpanded: true,
+                  items: NotificationInterval.values
+                      .map(
+                        (notificationInterval) =>
+                            DropdownMenuItem<NotificationInterval>(
+                              value: notificationInterval,
+                              child: Text(
+                                notificationInterval.label(intervalLanguage),
+                              ),
+                            ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (notificationInterval) {
+                    if (notificationInterval != null) {
+                      onIntervalChanged(notificationInterval);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -174,6 +234,60 @@ class _TopicHeader extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _NotificationSchedule extends StatelessWidget {
+  const _NotificationSchedule({
+    required this.enabled,
+    required this.scheduledAt,
+    required this.timeZone,
+  });
+
+  final bool enabled;
+  final DateTime? scheduledAt;
+  final AppTimeZone timeZone;
+  static bool _timeZonesInitialized = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final text = !enabled
+        ? 'Уведомления для темы выключены'
+        : scheduledAt == null
+        ? 'Пока не входит в ближайшее расписание'
+        : 'Следующее уведомление: ${_formatDateTime(scheduledAt!, timeZone)} '
+              '(${timeZone.label})';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          enabled && scheduledAt != null
+              ? Icons.notifications_active_outlined
+              : Icons.notifications_off_outlined,
+          size: 17,
+          color: theme.colorScheme.primary,
+        ),
+        const SizedBox(width: 6),
+        Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+      ],
+    );
+  }
+
+  static String _formatDateTime(DateTime value, AppTimeZone timeZone) {
+    if (!_timeZonesInitialized) {
+      tz_data.initializeTimeZones();
+      _timeZonesInitialized = true;
+    }
+    final zonedValue = tz.TZDateTime.from(
+      value,
+      tz.getLocation(timeZone.locationName),
+    );
+    String twoDigits(int number) => number.toString().padLeft(2, '0');
+    return '${twoDigits(zonedValue.day)}.${twoDigits(zonedValue.month)}.'
+        '${zonedValue.year}, '
+        '${twoDigits(zonedValue.hour)}:${twoDigits(zonedValue.minute)}';
   }
 }
 
