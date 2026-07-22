@@ -20,7 +20,6 @@ Future<void> main() async {
     AiClient(),
     scheduler,
   );
-  WidgetsBinding.instance.addObserver(controller);
   await controller.load();
 
   final launchNotification = await scheduler.launchNotification;
