@@ -14,6 +14,7 @@ Stops an Android Emulator without letting "adb emu kill" hang forever.
 [CmdletBinding()]
 param(
     [string]$Serial = "emulator-5554",
+    [string]$AvdName = "UneBil_API35",
     [ValidateRange(1, 120)]
     [int]$TimeoutSeconds = 8,
     [ValidateRange(0, 120)]
@@ -144,6 +145,18 @@ function Get-ProcessIdsForPorts {
     return @($processIds | Sort-Object -Unique)
 }
 
+function Get-ProcessIdsForAvd {
+    param([string]$Name)
+
+    $avdArgument = [regex]::Escape("-avd $Name")
+    return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -in @("emulator.exe", "qemu-system-x86_64.exe", "qemu-system-i386.exe") -and
+            $_.CommandLine -match $avdArgument
+        } |
+        Select-Object -ExpandProperty ProcessId -Unique)
+}
+
 function Stop-ProcessIds {
     param([int[]]$ProcessIds)
 
@@ -244,9 +257,46 @@ function Watch-ForEmulatorRestart {
     }
 }
 
+function Remove-StaleAvdLocks {
+    param([string]$Name)
+
+    if ((Get-ProcessIdsForAvd -Name $Name).Count -gt 0) {
+        Write-Warning "AVD processes are still running; lock files were kept."
+        return
+    }
+
+    $avdHome = if ($env:ANDROID_AVD_HOME) {
+        $env:ANDROID_AVD_HOME
+    } elseif (Test-Path -LiteralPath "C:\Android\avd") {
+        "C:\Android\avd"
+    } else {
+        Join-Path $env:USERPROFILE ".android\avd"
+    }
+    $resolvedHome = (Resolve-Path -LiteralPath $avdHome -ErrorAction SilentlyContinue).Path
+    $avdDirectory = Join-Path $resolvedHome "$Name.avd"
+    $resolvedAvd = (Resolve-Path -LiteralPath $avdDirectory -ErrorAction SilentlyContinue).Path
+    if (-not $resolvedHome -or -not $resolvedAvd -or
+        -not $resolvedAvd.StartsWith($resolvedHome + [IO.Path]::DirectorySeparatorChar)) {
+        Write-Warning "Could not verify the AVD directory; lock files were kept."
+        return
+    }
+
+    foreach ($lockName in @("hardware-qemu.ini.lock", "multiinstance.lock")) {
+        $lockPath = Join-Path $resolvedAvd $lockName
+        if (Test-Path -LiteralPath $lockPath) {
+            Remove-Item -LiteralPath $lockPath -Recurse -Force
+            Write-Host "Removed stale lock: $lockPath"
+        }
+    }
+}
+
 $adbPath = Get-AdbPath
 $ports = Get-EmulatorPorts -DeviceSerial $Serial
-$initialProcessIds = @(Get-ProcessIdsForPorts -Ports $ports)
+$initialProcessIds = @(
+    @(Get-ProcessIdsForPorts -Ports $ports) +
+    @(Get-ProcessIdsForAvd -Name $AvdName) |
+    Sort-Object -Unique
+)
 
 if ($initialProcessIds.Count -gt 0) {
     Write-Host "Found emulator/qemu PID(s) on ports $($ports -join ', '): $($initialProcessIds -join ', ')."
@@ -278,5 +328,6 @@ if (-not $SkipAdbRestart) {
 }
 
 Watch-ForEmulatorRestart -Ports $ports -Seconds $WatchSeconds
+Remove-StaleAvdLocks -Name $AvdName
 
 Write-Host "Done."
