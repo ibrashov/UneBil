@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/app_language.dart';
 import '../models/app_time_zone.dart';
 import '../models/notification_length.dart';
+import '../models/notification_time.dart';
 import '../services/app_controller.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -89,6 +90,55 @@ class SettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _SettingsCard(
+                title: 'Время уведомлений',
+                child: Column(
+                  children: [
+                    if (settings.notificationTimes.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Уведомления не запланированы'),
+                        ),
+                      )
+                    else
+                      ...settings.notificationTimes.map(
+                        (time) => ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.schedule),
+                          title: Text(time.label),
+                          trailing: IconButton(
+                            tooltip: 'Удалить время',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () {
+                              controller.removeNotificationTime(time);
+                            },
+                          ),
+                        ),
+                      ),
+                    if (settings.notificationTimes.isNotEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Эти часы используются вместо интервала темы.',
+                          ),
+                        ),
+                      ),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _pickTime(context, controller),
+                        icon: const Icon(Icons.add_alarm),
+                        label: const Text('Добавить время'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsCard(
                 title: 'Проверка расписания',
                 child: SizedBox(
                   width: double.infinity,
@@ -129,6 +179,71 @@ class _SettingsCard extends StatelessWidget {
       ),
     );
   }
+}
+
+@visibleForTesting
+TimeOfDay addHoursToTimeOfDay(TimeOfDay time, int hours) {
+  const minutesInDay = 24 * 60;
+  final totalMinutes =
+      (time.hour * 60 + time.minute + hours * 60) % minutesInDay;
+  return TimeOfDay(hour: totalMinutes ~/ 60, minute: totalMinutes % 60);
+}
+
+Future<void> _pickTime(BuildContext context, AppController controller) async {
+  final now = TimeOfDay.now();
+  final interval = await showModalBottomSheet<int>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Через сколько часов?',
+              style: Theme.of(sheetContext).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            const Text('Выбери интервал до уведомления'),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                for (final hours in const <int>[1, 2, 3]) ...[
+                  if (hours > 1) const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(sheetContext, hours),
+                      child: Text('+$hours ч'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (interval == null || !context.mounted) {
+    return;
+  }
+
+  final picked = await showTimePicker(
+    context: context,
+    initialTime: addHoursToTimeOfDay(now, interval),
+    helpText: 'Выбери время',
+    cancelText: 'Отмена',
+    confirmText: 'Готово',
+  );
+  if (picked == null) {
+    return;
+  }
+
+  await controller.addNotificationTime(
+    NotificationTime(hour: picked.hour, minute: picked.minute),
+  );
 }
 
 Future<void> _sendTestNotification(
