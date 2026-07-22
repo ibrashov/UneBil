@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
@@ -9,13 +7,14 @@ import '../models/app_time_zone.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_interval.dart';
 import '../models/notification_length.dart';
+import '../models/notification_time.dart';
 import '../models/topic.dart';
 import 'fact_generator.dart';
 import 'fact_deduplicator.dart';
 import 'notification_scheduler.dart';
 import 'storage_service.dart';
 
-class AppController extends ChangeNotifier with WidgetsBindingObserver {
+class AppController extends ChangeNotifier {
   AppController(
     this._storage,
     this._factGenerator,
@@ -83,19 +82,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && !_loading) {
-      unawaited(_rescheduleNotifications());
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
   List<LearningFact> factsForTopic(String topicId) {
     return _facts
         .where((fact) => fact.topicId == topicId)
@@ -109,13 +95,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     DateTime? now,
   }) {
     return buildIntervalNotificationPlan(
-      settings: _settings,
-      topics: _topics
-          .where((topic) => topic.id == topicId)
-          .toList(growable: false),
-      facts: _facts,
-      now: now ?? DateTime.now(),
-    );
+          settings: _settings,
+          topics: _topics,
+          facts: _facts,
+          now: now ?? DateTime.now(),
+        )
+        .where((notification) => notification.topicId == topicId)
+        .toList(growable: false);
   }
 
   Future<void> addTopic(
@@ -252,6 +238,21 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> updateTimeZone(AppTimeZone timeZone) {
     return updateSettings(_settings.copyWith(timeZone: timeZone));
+  }
+
+  Future<void> addNotificationTime(NotificationTime time) {
+    final times = <NotificationTime>{
+      ..._settings.notificationTimes,
+      time,
+    }.toList()..sort();
+    return updateSettings(_settings.copyWith(notificationTimes: times));
+  }
+
+  Future<void> removeNotificationTime(NotificationTime time) {
+    final times = _settings.notificationTimes
+        .where((candidate) => candidate != time)
+        .toList(growable: false);
+    return updateSettings(_settings.copyWith(notificationTimes: times));
   }
 
   Future<void> updateSettings(AppSettings settings) async {
