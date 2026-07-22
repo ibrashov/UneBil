@@ -10,6 +10,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
 import '../models/learning_fact.dart';
+import '../models/notification_time.dart';
 import '../models/topic.dart';
 
 class NotificationPermissionException implements Exception {
@@ -27,10 +28,8 @@ class NotificationTarget {
   final String topicId;
   final String factId;
 
-  String toPayload() => jsonEncode(<String, String>{
-    'topicId': topicId,
-    'factId': factId,
-  });
+  String toPayload() =>
+      jsonEncode(<String, String>{'topicId': topicId, 'factId': factId});
 
   static NotificationTarget? tryParse(String? payload) {
     if (payload == null || payload.isEmpty) {
@@ -73,7 +72,6 @@ class PlannedFactNotification {
 }
 
 /// Creates a bounded, rotating notification queue from cached facts only.
-@visibleForTesting
 List<PlannedFactNotification> buildIntervalNotificationPlan({
   required AppSettings settings,
   required List<Topic> topics,
@@ -81,6 +79,15 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
   required DateTime now,
   int notificationsPerTopic = NotificationScheduler.notificationsPerTopic,
 }) {
+  if (settings.notificationTimes.isNotEmpty) {
+    return _buildDailyNotificationPlan(
+      settings: settings,
+      topics: topics,
+      facts: facts,
+      now: now,
+    );
+  }
+
   final planned = <PlannedFactNotification>[];
 
   for (final topic in topics.where((topic) => topic.enabled)) {
@@ -111,7 +118,75 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
     }
   }
 
+  planned.sort((first, second) {
+    final byTime = first.scheduledAt.compareTo(second.scheduledAt);
+    return byTime != 0 ? byTime : first.id.compareTo(second.id);
+  });
+  return planned
+      .take(NotificationScheduler.maxPendingFactNotifications)
+      .toList(growable: false);
+}
+
+List<PlannedFactNotification> _buildDailyNotificationPlan({
+  required AppSettings settings,
+  required List<Topic> topics,
+  required List<LearningFact> facts,
+  required DateTime now,
+}) {
+  final enabledTopics = topics
+      .where((topic) => topic.enabled)
+      .toList(growable: false);
+  if (enabledTopics.isEmpty) {
+    return <PlannedFactNotification>[];
+  }
+
+  final planned = <PlannedFactNotification>[];
+  final times = settings.notificationTimes.take(
+    NotificationScheduler.maxDailyNotificationTimes,
+  );
+  var index = 0;
+  for (final time in times) {
+    final notificationIndex = index;
+    index += 1;
+    final topic = enabledTopics[notificationIndex % enabledTopics.length];
+    final topicFacts = _notificationFactsForTopic(topic, settings, facts);
+    if (topicFacts.isEmpty) {
+      continue;
+    }
+    final fact = topicFacts[notificationIndex % topicFacts.length];
+    planned.add(
+      PlannedFactNotification(
+        id: NotificationScheduler.dailyNotificationIdStart + notificationIndex,
+        topicId: topic.id,
+        factId: fact.id,
+        scheduledAt: _nextInstanceOf(time, now),
+        title: fact.title,
+        body: fact.body,
+      ),
+    );
+  }
   return planned;
+}
+
+DateTime _nextInstanceOf(NotificationTime time, DateTime now) {
+  DateTime onDay(int day) => now is tz.TZDateTime
+      ? tz.TZDateTime(
+          now.location,
+          now.year,
+          now.month,
+          day,
+          time.hour,
+          time.minute,
+        )
+      : now.isUtc
+      ? DateTime.utc(now.year, now.month, day, time.hour, time.minute)
+      : DateTime(now.year, now.month, day, time.hour, time.minute);
+
+  var scheduled = onDay(now.day);
+  if (!scheduled.isAfter(now)) {
+    scheduled = onDay(now.day + 1);
+  }
+  return scheduled;
 }
 
 DateTime _nextScheduledAt(Topic topic, DateTime now) {
@@ -170,6 +245,9 @@ class NotificationScheduler implements FactNotificationScheduler {
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   static const notificationsPerTopic = 12;
+  static const maxPendingFactNotifications = 48;
+  static const maxDailyNotificationTimes = 24;
+  static const dailyNotificationIdStart = 1000;
   static const topicNotificationIdStart = 10000;
   static const testNotificationId = 9000;
 
@@ -177,7 +255,6 @@ class NotificationScheduler implements FactNotificationScheduler {
   final StreamController<NotificationTarget> _notificationTaps =
       StreamController<NotificationTarget>.broadcast(sync: true);
   bool _initialized = false;
-  bool _requestedExactAlarmPermission = false;
   Future<void> _scheduleQueue = Future<void>.value();
 
   @override
@@ -216,9 +293,9 @@ class NotificationScheduler implements FactNotificationScheduler {
     required List<Topic> topics,
     required List<LearningFact> facts,
   }) {
-    // Rescheduling can be triggered by app resume while an AI generation or a
-    // settings update is already rebuilding the queue. Keep cancellation and
-    // replacement atomic so an older refresh cannot erase a newer schedule.
+    // Settings and fact updates can arrive while the queue is being rebuilt.
+    // Keep cancellation and replacement atomic so an older refresh cannot
+    // erase a newer schedule.
     final settingsSnapshot = settings;
     final topicsSnapshot = List<Topic>.of(topics, growable: false);
     final factsSnapshot = List<LearningFact>.of(facts, growable: false);
@@ -255,20 +332,20 @@ class NotificationScheduler implements FactNotificationScheduler {
       now: tz.TZDateTime.now(tz.local),
     );
 
-    await _cancelPendingFactNotifications();
+    // This app owns every pending notification created by this plugin. A
+    // single platform call avoids a burst of per-alarm binder transactions.
+    await _plugin.cancelAllPendingNotifications();
     if (planned.isEmpty) {
       return;
     }
 
-    await _requestExactAlarmPermissionOnce();
-    final scheduleMode = await _androidScheduleMode();
+    final repeatsDaily = settings.notificationTimes.isNotEmpty;
     for (final notification in planned) {
-      await _scheduleNotification(notification, scheduleMode: scheduleMode);
+      await _scheduleNotification(notification, repeatsDaily: repeatsDaily);
     }
   }
 
-  Stream<NotificationTarget> get notificationTaps =>
-      _notificationTaps.stream;
+  Stream<NotificationTarget> get notificationTaps => _notificationTaps.stream;
 
   Future<NotificationTarget?> get launchNotification async {
     if (kIsWeb) {
@@ -308,14 +385,6 @@ class NotificationScheduler implements FactNotificationScheduler {
     );
     final factNotification = planned.firstOrNull;
     final body = factNotification?.body ?? _testBody(settings.language);
-    await _requestExactAlarmPermissionOnce();
-    final scheduleMode = await _androidScheduleMode();
-    if (_androidPlugin != null &&
-        scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
-      throw const NotificationPermissionException(
-        'Разреши для UneBil "Будильники и напоминания", вернись в приложение и нажми проверку ещё раз.',
-      );
-    }
     await _scheduleNotification(
       PlannedFactNotification(
         id: testNotificationId,
@@ -327,17 +396,7 @@ class NotificationScheduler implements FactNotificationScheduler {
         title: factNotification?.title ?? _testTitle(settings.language),
         body: body,
       ),
-      scheduleMode: scheduleMode,
     );
-  }
-
-  Future<void> _cancelPendingFactNotifications() async {
-    final pending = await _plugin.pendingNotificationRequests();
-    for (final notification in pending) {
-      if (notification.id >= topicNotificationIdStart) {
-        await _plugin.cancel(id: notification.id);
-      }
-    }
   }
 
   void _useTimeZone(AppSettings settings) {
@@ -371,63 +430,21 @@ class NotificationScheduler implements FactNotificationScheduler {
 
   Future<void> _scheduleNotification(
     PlannedFactNotification notification, {
-    required AndroidScheduleMode scheduleMode,
+    bool repeatsDaily = false,
   }) async {
-    try {
-      await _plugin.zonedSchedule(
-        id: notification.id,
-        title: notification.title,
-        body: notification.body,
-        scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
-        notificationDetails: _notificationDetailsFor(notification.body),
-        androidScheduleMode: scheduleMode,
-        payload: NotificationTarget(
-          topicId: notification.topicId,
-          factId: notification.factId,
-        ).toPayload(),
-      );
-    } catch (_) {
-      if (scheduleMode == AndroidScheduleMode.inexactAllowWhileIdle) {
-        rethrow;
-      }
-      await _plugin.zonedSchedule(
-        id: notification.id,
-        title: notification.title,
-        body: notification.body,
-        scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
-        notificationDetails: _notificationDetailsFor(notification.body),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        payload: NotificationTarget(
-          topicId: notification.topicId,
-          factId: notification.factId,
-        ).toPayload(),
-      );
-    }
-  }
-
-  Future<void> _requestExactAlarmPermissionOnce() async {
-    if (_requestedExactAlarmPermission) {
-      return;
-    }
-
-    final android = _androidPlugin;
-    if (android == null) {
-      return;
-    }
-
-    _requestedExactAlarmPermission = true;
-    final canScheduleExact = await android.canScheduleExactNotifications();
-    if (canScheduleExact == false) {
-      await android.requestExactAlarmsPermission();
-    }
-  }
-
-  Future<AndroidScheduleMode> _androidScheduleMode() async {
-    final canScheduleExact =
-        await _androidPlugin?.canScheduleExactNotifications() ?? true;
-    return canScheduleExact
-        ? AndroidScheduleMode.exactAllowWhileIdle
-        : AndroidScheduleMode.inexactAllowWhileIdle;
+    await _plugin.zonedSchedule(
+      id: notification.id,
+      title: notification.title,
+      body: notification.body,
+      scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
+      notificationDetails: _notificationDetailsFor(notification.body),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      matchDateTimeComponents: repeatsDaily ? DateTimeComponents.time : null,
+      payload: NotificationTarget(
+        topicId: notification.topicId,
+        factId: notification.factId,
+      ).toPayload(),
+    );
   }
 
   NotificationDetails _notificationDetailsFor(String body) =>
