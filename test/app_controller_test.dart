@@ -8,6 +8,7 @@ import 'package:unebil/models/app_settings.dart';
 import 'package:unebil/models/learning_fact.dart';
 import 'package:unebil/models/notification_interval.dart';
 import 'package:unebil/models/notification_length.dart';
+import 'package:unebil/models/notification_time.dart';
 import 'package:unebil/models/topic.dart';
 import 'package:unebil/services/app_controller.dart';
 import 'package:unebil/services/fact_generator.dart';
@@ -140,7 +141,10 @@ void main() {
     );
     expect(plan[0].title, isNot(plan[1].title));
     expect(plan[0].title, plan[2].title);
-    expect(<String>{plan[0].factId, plan[1].factId}, <String>{'first', 'second'});
+    expect(
+      <String>{plan[0].factId, plan[1].factId},
+      <String>{'first', 'second'},
+    );
 
     final anchoredTopic = topic.copyWith(
       nextNotificationAt: DateTime.utc(2026, 7, 10, 0, 30),
@@ -201,6 +205,24 @@ void main() {
         interval.duration,
       );
     }
+
+    final dailyPlan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+        notificationTimes: <NotificationTime>[
+          NotificationTime(hour: 9, minute: 0),
+          NotificationTime(hour: 18, minute: 30),
+        ],
+      ),
+      topics: <Topic>[topic],
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10, 10),
+    );
+    expect(dailyPlan, hasLength(2));
+    expect(dailyPlan[0].scheduledAt, DateTime.utc(2026, 7, 11, 9));
+    expect(dailyPlan[1].scheduledAt, DateTime.utc(2026, 7, 10, 18, 30));
+    expect(dailyPlan.map((item) => item.id), <int>[1000, 1001]);
   });
 
   test('notification payload preserves the exact fact destination', () {
@@ -211,6 +233,88 @@ void main() {
     expect(decoded?.topicId, 'space');
     expect(decoded?.factId, 'fact-42');
     expect(NotificationTarget.tryParse('legacy-topic-id'), isNull);
+  });
+
+  test('caps the Android alarm queue across many topics', () {
+    final topics = List<Topic>.generate(
+      6,
+      (index) => Topic(
+        id: 'topic-$index',
+        title: 'Topic $index',
+        enabled: true,
+        createdAt: DateTime.utc(2026, 7, 1),
+        notificationInterval: NotificationInterval.hourly,
+        notificationId:
+            NotificationScheduler.topicNotificationIdStart +
+            index * NotificationScheduler.notificationsPerTopic,
+      ),
+    );
+    final facts = topics
+        .map(
+          (topic) => LearningFact(
+            id: 'fact-${topic.id}',
+            topicId: topic.id,
+            topicTitle: topic.title,
+            title: topic.title,
+            body: 'Cached fact.',
+            language: AppLanguage.en,
+            length: NotificationLength.medium,
+            createdAt: DateTime.utc(2026, 7, 1),
+          ),
+        )
+        .toList();
+
+    final plan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+      ),
+      topics: topics,
+      facts: facts,
+      now: DateTime.utc(2026, 7, 10),
+    );
+
+    expect(plan, hasLength(NotificationScheduler.maxPendingFactNotifications));
+    expect(
+      plan.map((item) => item.scheduledAt),
+      orderedEquals(plan.map((item) => item.scheduledAt).toList()..sort()),
+    );
+  });
+
+  test('caps recurring daily alarms loaded from settings', () {
+    final topic = Topic(
+      id: 'space',
+      title: 'Space',
+      enabled: true,
+      createdAt: DateTime.utc(2026, 7, 1),
+      notificationId: NotificationScheduler.topicNotificationIdStart,
+    );
+    final fact = LearningFact(
+      id: 'space-fact',
+      topicId: topic.id,
+      topicTitle: topic.title,
+      title: 'Space fact',
+      body: 'Cached fact.',
+      language: AppLanguage.en,
+      length: NotificationLength.medium,
+      createdAt: DateTime.utc(2026, 7, 1),
+    );
+
+    final plan = buildIntervalNotificationPlan(
+      settings: AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+        notificationTimes: List<NotificationTime>.generate(
+          30,
+          (index) => NotificationTime(hour: 8, minute: index),
+        ),
+      ),
+      topics: <Topic>[topic],
+      facts: <LearningFact>[fact],
+      now: DateTime.utc(2026, 7, 10),
+    );
+
+    expect(plan, hasLength(NotificationScheduler.maxDailyNotificationTimes));
   });
 
   test('generates against previous facts and skips duplicate responses', () async {
@@ -487,10 +591,31 @@ void main() {
 
     await controller.updateLanguage(AppLanguage.kk);
     await controller.updateLength(NotificationLength.detailed);
+    await controller.addNotificationTime(
+      const NotificationTime(hour: 18, minute: 50),
+    );
+    await controller.addNotificationTime(
+      const NotificationTime(hour: 9, minute: 15),
+    );
+    await controller.addNotificationTime(
+      const NotificationTime(hour: 18, minute: 50),
+    );
 
     final loaded = StorageService(prefs).loadSettings();
     expect(loaded.language, AppLanguage.kk);
     expect(loaded.length, NotificationLength.detailed);
+    expect(loaded.notificationTimes, const <NotificationTime>[
+      NotificationTime(hour: 9, minute: 15),
+      NotificationTime(hour: 18, minute: 50),
+    ]);
+
+    await controller.removeNotificationTime(
+      const NotificationTime(hour: 9, minute: 15),
+    );
+    expect(
+      StorageService(prefs).loadSettings().notificationTimes,
+      const <NotificationTime>[NotificationTime(hour: 18, minute: 50)],
+    );
   });
 
   test(
