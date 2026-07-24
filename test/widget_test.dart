@@ -1,12 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:unebil/main.dart';
+import 'package:unebil/models/app_language.dart';
+import 'package:unebil/models/interface_language.dart';
 import 'package:unebil/models/notification_interval.dart';
+import 'package:unebil/models/notification_length.dart';
 import 'package:unebil/screens/settings_screen.dart';
 
 import 'app_controller_test.dart';
 
 void main() {
+  testWidgets('asks for the interface language on first launch', (
+    tester,
+  ) async {
+    final controller = await createController(selectInterfaceLanguage: false);
+
+    await tester.pumpWidget(UneBilApp(controller: controller));
+
+    expect(find.text('Қазақша'), findsOneWidget);
+    expect(find.text('English'), findsOneWidget);
+    expect(find.text('Русский'), findsOneWidget);
+
+    await tester.tap(find.text('Русский'));
+    await tester.pumpAndSettle();
+
+    expect(controller.settings.interfaceLanguage, InterfaceLanguage.ru);
+    expect(controller.settings.language, AppLanguage.ru);
+    expect(find.text('Добавь первую тему'), findsOneWidget);
+  });
+
   testWidgets('home screen shows empty state', (tester) async {
     final controller = await createController();
 
@@ -30,20 +52,36 @@ void main() {
     expect(controller.topics.single.title, 'Космос');
   });
 
-  testWidgets('changes language and length settings', (tester) async {
+  testWidgets('keeps interface and fact languages independent', (tester) async {
     final controller = await createController();
 
     await tester.pumpWidget(UneBilApp(controller: controller));
     await tester.tap(find.byIcon(Icons.tune));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Қазақша'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Подробно'));
+    await tester.tap(
+      find.descendant(
+        of: find.byType(SegmentedButton<InterfaceLanguage>),
+        matching: find.text('Қазақша'),
+      ),
+    );
     await tester.pumpAndSettle();
 
-    expect(controller.settings.language.label, 'Қазақша');
-    expect(controller.settings.length.targetWords, 70);
+    expect(controller.settings.interfaceLanguage, InterfaceLanguage.kk);
+    expect(controller.settings.language, AppLanguage.ru);
+    expect(find.text('Баптаулар'), findsOneWidget);
+
+    await tester.tap(
+      find.descendant(
+        of: find.byType(SegmentedButton<AppLanguage>),
+        matching: find.text('Қазақша'),
+      ),
+    );
+    await tester.tap(find.text('Толық'));
+    await tester.pumpAndSettle();
+
+    expect(controller.settings.language, AppLanguage.kk);
+    expect(controller.settings.length, NotificationLength.detailed);
   });
 
   test('adds hours to a time and wraps after midnight', () {
