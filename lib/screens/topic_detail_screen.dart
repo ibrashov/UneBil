@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
-import '../models/app_language.dart';
+import '../localization/app_strings.dart';
 import '../models/app_time_zone.dart';
 import '../models/notification_interval.dart';
 import '../models/topic.dart';
@@ -23,13 +23,14 @@ class TopicDetailScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
+        final strings = AppStrings(controller.settings.interfaceLanguage!);
         final topic = controller.topics
             .where((candidate) => candidate.id == topicId)
             .firstOrNull;
         if (topic == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Тема')),
-            body: const Center(child: Text('Тема удалена')),
+            appBar: AppBar(title: Text(strings.topic)),
+            body: Center(child: Text(strings.topicDeleted)),
           );
         }
 
@@ -53,13 +54,14 @@ class TopicDetailScreen extends StatelessWidget {
               _TopicHeader(
                 topic: topic,
                 language: controller.settings.language.label,
-                length:
-                    '${controller.settings.length.label} · ${controller.settings.length.targetWords} слов',
+                length: strings.aboutWords(
+                  controller.settings.length.targetWords,
+                ),
                 interval: topic.notificationInterval.label(
-                  controller.settings.language,
+                  controller.settings.interfaceLanguage!,
                 ),
                 selectedInterval: topic.notificationInterval,
-                intervalLanguage: controller.settings.language,
+                strings: strings,
                 onIntervalChanged: (interval) {
                   controller.updateTopicInterval(topic.id, interval);
                 },
@@ -72,23 +74,26 @@ class TopicDetailScreen extends StatelessWidget {
                     return;
                   }
 
-                  final message =
-                      controller.generationErrorForTopic(topic.id) ??
-                      (addedCount > 0
-                          ? 'Готово: факт добавлен.'
-                          : 'Backend вернул пустой ответ.');
+                  final error = controller.generationErrorForTopic(topic.id);
+                  final localizedMessage = error != null
+                      ? strings.localizeGenerationError(error)
+                      : addedCount > 0
+                      ? strings.factAdded
+                      : strings.emptyBackendResponse;
                   ScaffoldMessenger.of(context)
                     ..hideCurrentSnackBar()
-                    ..showSnackBar(SnackBar(content: Text(message)));
+                    ..showSnackBar(SnackBar(content: Text(localizedMessage)));
                 },
               ),
               if (generationError != null) ...[
                 const SizedBox(height: 12),
-                _ErrorBanner(message: generationError),
+                _ErrorBanner(
+                  message: strings.localizeGenerationError(generationError),
+                ),
               ],
               const SizedBox(height: 16),
               if (facts.isEmpty)
-                const _NoFactsYet()
+                _NoFactsYet(strings: strings)
               else
                 ...facts.map(
                   (fact) => Padding(
@@ -107,7 +112,7 @@ class TopicDetailScreen extends StatelessWidget {
                             Text(fact.body),
                             const SizedBox(height: 12),
                             Text(
-                              '${fact.language.label} · ${fact.length.label}',
+                              '${fact.language.label} · ${strings.lengthLabel(fact.length)}',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             const SizedBox(height: 8),
@@ -115,6 +120,7 @@ class TopicDetailScreen extends StatelessWidget {
                               enabled: topic.enabled,
                               scheduledAt: nextNotificationByFact[fact.id],
                               timeZone: controller.settings.timeZone,
+                              strings: strings,
                             ),
                           ],
                         ),
@@ -137,7 +143,7 @@ class _TopicHeader extends StatelessWidget {
     required this.length,
     required this.interval,
     required this.selectedInterval,
-    required this.intervalLanguage,
+    required this.strings,
     required this.onIntervalChanged,
     required this.generating,
     required this.onGenerate,
@@ -148,7 +154,7 @@ class _TopicHeader extends StatelessWidget {
   final String length;
   final String interval;
   final NotificationInterval selectedInterval;
-  final AppLanguage intervalLanguage;
+  final AppStrings strings;
   final ValueChanged<NotificationInterval> onIntervalChanged;
   final bool generating;
   final VoidCallback onGenerate;
@@ -186,10 +192,10 @@ class _TopicHeader extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             InputDecorator(
-              decoration: const InputDecoration(
-                labelText: 'Как часто показывать уведомления',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.schedule),
+              decoration: InputDecoration(
+                labelText: strings.notificationFrequency,
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.schedule),
               ),
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<NotificationInterval>(
@@ -201,7 +207,7 @@ class _TopicHeader extends StatelessWidget {
                             DropdownMenuItem<NotificationInterval>(
                               value: notificationInterval,
                               child: Text(
-                                notificationInterval.label(intervalLanguage),
+                                strings.intervalLabel(notificationInterval),
                               ),
                             ),
                       )
@@ -226,7 +232,7 @@ class _TopicHeader extends StatelessWidget {
                       )
                     : const Icon(Icons.auto_awesome),
                 label: Text(
-                  generating ? 'Генерируем...' : 'Сгенерировать факт',
+                  generating ? strings.generating : strings.generateFact,
                 ),
               ),
             ),
@@ -242,22 +248,26 @@ class _NotificationSchedule extends StatelessWidget {
     required this.enabled,
     required this.scheduledAt,
     required this.timeZone,
+    required this.strings,
   });
 
   final bool enabled;
   final DateTime? scheduledAt;
   final AppTimeZone timeZone;
+  final AppStrings strings;
   static bool _timeZonesInitialized = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final text = !enabled
-        ? 'Уведомления для темы выключены'
+        ? strings.topicNotificationsOff
         : scheduledAt == null
-        ? 'Пока не входит в ближайшее расписание'
-        : 'Следующее уведомление: ${_formatDateTime(scheduledAt!, timeZone)} '
-              '(${timeZone.label})';
+        ? strings.notInUpcomingSchedule
+        : strings.nextNotification(
+            _formatDateTime(scheduledAt!, timeZone),
+            strings.timeZoneLabel(timeZone),
+          );
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -325,7 +335,9 @@ class _ErrorBanner extends StatelessWidget {
 }
 
 class _NoFactsYet extends StatelessWidget {
-  const _NoFactsYet();
+  const _NoFactsYet({required this.strings});
+
+  final AppStrings strings;
 
   @override
   Widget build(BuildContext context) {
@@ -341,14 +353,11 @@ class _NoFactsYet extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Пока нет фактов',
+              strings.noFactsYet,
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Нажми кнопку генерации, чтобы подготовить факты для уведомлений.',
-              textAlign: TextAlign.center,
-            ),
+            Text(strings.noFactsBody, textAlign: TextAlign.center),
           ],
         ),
       ),
