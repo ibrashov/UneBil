@@ -1,4 +1,4 @@
-import 'app_language.dart';
+import 'interface_language.dart';
 
 enum NotificationInterval {
   hourly('hourly', 1),
@@ -12,27 +12,27 @@ enum NotificationInterval {
 
   Duration get duration => Duration(hours: hours);
 
-  static String selectorLabel(AppLanguage language) {
+  static String selectorLabel(InterfaceLanguage language) {
     return switch (language) {
-      AppLanguage.ru => 'Интервал уведомлений',
-      AppLanguage.kk => 'Ескертулер аралығы',
-      AppLanguage.en => 'Notification interval',
+      InterfaceLanguage.ru => 'Интервал уведомлений',
+      InterfaceLanguage.kk => 'Хабарландыру аралығы',
+      InterfaceLanguage.en => 'Notification interval',
     };
   }
 
-  String label(AppLanguage language) {
+  String label(InterfaceLanguage language) {
     return switch (language) {
-      AppLanguage.ru => switch (this) {
+      InterfaceLanguage.ru => switch (this) {
         NotificationInterval.hourly => 'Каждый час',
         NotificationInterval.everyTwoHours => 'Каждые 2 часа',
         NotificationInterval.everyThreeHours => 'Каждые 3 часа',
       },
-      AppLanguage.kk => switch (this) {
+      InterfaceLanguage.kk => switch (this) {
         NotificationInterval.hourly => 'Әр сағат сайын',
         NotificationInterval.everyTwoHours => 'Әр 2 сағат сайын',
         NotificationInterval.everyThreeHours => 'Әр 3 сағат сайын',
       },
-      AppLanguage.en => switch (this) {
+      InterfaceLanguage.en => switch (this) {
         NotificationInterval.hourly => 'Every hour',
         NotificationInterval.everyTwoHours => 'Every 2 hours',
         NotificationInterval.everyThreeHours => 'Every 3 hours',
