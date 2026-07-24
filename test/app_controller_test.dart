@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unebil/models/app_language.dart';
 import 'package:unebil/models/app_settings.dart';
+import 'package:unebil/models/interface_language.dart';
 import 'package:unebil/models/learning_fact.dart';
 import 'package:unebil/models/notification_interval.dart';
 import 'package:unebil/models/notification_length.dart';
@@ -20,6 +21,23 @@ void main() {
     expect(NotificationLength.short.targetWords, 20);
     expect(NotificationLength.medium.targetWords, 40);
     expect(NotificationLength.detailed.targetWords, 70);
+  });
+
+  test('defers notification setup until the first language choice', () async {
+    final scheduler = RecordingScheduler();
+    final controller = await createController(
+      scheduler: scheduler,
+      selectInterfaceLanguage: false,
+    );
+
+    expect(scheduler.initializeCalls, 0);
+    expect(scheduler.scheduleCalls, 0);
+
+    await controller.updateInterfaceLanguage(InterfaceLanguage.kk);
+
+    expect(scheduler.initializeCalls, 1);
+    expect(scheduler.scheduleCalls, 1);
+    expect(controller.settings.language, AppLanguage.ru);
   });
 
   test('adds, toggles, and deletes topics', () async {
@@ -77,16 +95,19 @@ void main() {
 
   test('interval labels are available in every supported language', () {
     expect(
-      NotificationInterval.selectorLabel(AppLanguage.en),
+      NotificationInterval.selectorLabel(InterfaceLanguage.en),
       'Notification interval',
     );
-    expect(NotificationInterval.hourly.label(AppLanguage.ru), 'Каждый час');
     expect(
-      NotificationInterval.everyTwoHours.label(AppLanguage.kk),
+      NotificationInterval.hourly.label(InterfaceLanguage.ru),
+      'Каждый час',
+    );
+    expect(
+      NotificationInterval.everyTwoHours.label(InterfaceLanguage.kk),
       'Әр 2 сағат сайын',
     );
     expect(
-      NotificationInterval.everyThreeHours.label(AppLanguage.en),
+      NotificationInterval.everyThreeHours.label(InterfaceLanguage.en),
       'Every 3 hours',
     );
   });
@@ -589,6 +610,7 @@ void main() {
     );
     await controller.load();
 
+    await controller.updateInterfaceLanguage(InterfaceLanguage.en);
     await controller.updateLanguage(AppLanguage.kk);
     await controller.updateLength(NotificationLength.detailed);
     await controller.addNotificationTime(
@@ -602,6 +624,7 @@ void main() {
     );
 
     final loaded = StorageService(prefs).loadSettings();
+    expect(loaded.interfaceLanguage, InterfaceLanguage.en);
     expect(loaded.language, AppLanguage.kk);
     expect(loaded.length, NotificationLength.detailed);
     expect(loaded.notificationTimes, const <NotificationTime>[
@@ -685,6 +708,7 @@ Future<AppController> createController({
   FakeFactGenerator? fakeGenerator,
   FactGenerator? factGenerator,
   RecordingScheduler? scheduler,
+  bool selectInterfaceLanguage = true,
 }) async {
   final prefs = await mockPrefs();
   final controller = AppController(
@@ -693,6 +717,9 @@ Future<AppController> createController({
     scheduler ?? RecordingScheduler(),
   );
   await controller.load();
+  if (selectInterfaceLanguage) {
+    await controller.updateInterfaceLanguage(InterfaceLanguage.ru);
+  }
   return controller;
 }
 
@@ -800,6 +827,7 @@ LearningFact learningFact({
 }
 
 class RecordingScheduler implements FactNotificationScheduler {
+  int initializeCalls = 0;
   int scheduleCalls = 0;
   int testNotificationCalls = 0;
   AppSettings? lastSettings;
@@ -807,7 +835,9 @@ class RecordingScheduler implements FactNotificationScheduler {
   List<LearningFact>? lastFacts;
 
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    initializeCalls += 1;
+  }
 
   @override
   Future<void> scheduleFacts({
