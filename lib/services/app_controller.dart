@@ -1,9 +1,11 @@
 import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 
+import '../localization/app_strings.dart';
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
 import '../models/app_time_zone.dart';
+import '../models/interface_language.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_interval.dart';
 import '../models/notification_length.dart';
@@ -76,8 +78,10 @@ class AppController extends ChangeNotifier {
     if (cleanup.changed) {
       await _storage.saveFacts(_facts);
     }
-    await _scheduler.initialize();
-    await _rescheduleNotifications();
+    if (_settings.interfaceLanguage != null) {
+      await _scheduler.initialize();
+      await _rescheduleNotifications();
+    }
     _loading = false;
     notifyListeners();
   }
@@ -230,6 +234,23 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateLanguage(AppLanguage language) {
     return updateSettings(_settings.copyWith(language: language));
+  }
+
+  Future<void> updateFactLanguage(AppLanguage language) {
+    return updateLanguage(language);
+  }
+
+  Future<void> updateInterfaceLanguage(InterfaceLanguage language) async {
+    final isFirstSelection = _settings.interfaceLanguage == null;
+    _lastError = null;
+    _generationErrors.clear();
+    _settings = _settings.copyWith(interfaceLanguage: language);
+    await _storage.saveSettings(_settings);
+    if (isFirstSelection) {
+      await _scheduler.initialize();
+      await _rescheduleNotifications();
+    }
+    notifyListeners();
   }
 
   Future<void> updateLength(NotificationLength length) {
@@ -390,12 +411,17 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       return true;
     } on NotificationPermissionException catch (error) {
-      _lastError = error.message;
+      _lastError = _settings.interfaceLanguage == null
+          ? error.message
+          : AppStrings(
+              _settings.interfaceLanguage!,
+            ).notificationsPermissionDenied;
       notifyListeners();
       return false;
     } catch (_) {
-      _lastError =
-          'Не удалось запланировать тестовый факт. Проверь уведомления и разрешение точных будильников Android.';
+      _lastError = _settings.interfaceLanguage == null
+          ? 'Не удалось запланировать тестовый факт. Проверь уведомления и разрешение точных будильников Android.'
+          : AppStrings(_settings.interfaceLanguage!).testScheduleError;
       notifyListeners();
       return false;
     }
