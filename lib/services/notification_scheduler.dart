@@ -9,6 +9,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
+import '../models/interface_language.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_time.dart';
 import '../models/topic.dart';
@@ -340,8 +341,14 @@ class NotificationScheduler implements FactNotificationScheduler {
     }
 
     final repeatsDaily = settings.notificationTimes.isNotEmpty;
+    final interfaceLanguage =
+        settings.interfaceLanguage ?? InterfaceLanguage.ru;
     for (final notification in planned) {
-      await _scheduleNotification(notification, repeatsDaily: repeatsDaily);
+      await _scheduleNotification(
+        notification,
+        interfaceLanguage: interfaceLanguage,
+        repeatsDaily: repeatsDaily,
+      );
     }
   }
 
@@ -384,7 +391,9 @@ class NotificationScheduler implements FactNotificationScheduler {
       notificationsPerTopic: 1,
     );
     final factNotification = planned.firstOrNull;
-    final body = factNotification?.body ?? _testBody(settings.language);
+    final interfaceLanguage =
+        settings.interfaceLanguage ?? InterfaceLanguage.ru;
+    final body = factNotification?.body ?? _testBody(interfaceLanguage);
     await _scheduleNotification(
       PlannedFactNotification(
         id: testNotificationId,
@@ -393,9 +402,10 @@ class NotificationScheduler implements FactNotificationScheduler {
         scheduledAt: tz.TZDateTime.now(
           tz.local,
         ).add(const Duration(seconds: 15)),
-        title: factNotification?.title ?? _testTitle(settings.language),
+        title: factNotification?.title ?? _testTitle(interfaceLanguage),
         body: body,
       ),
+      interfaceLanguage: interfaceLanguage,
     );
   }
 
@@ -430,6 +440,7 @@ class NotificationScheduler implements FactNotificationScheduler {
 
   Future<void> _scheduleNotification(
     PlannedFactNotification notification, {
+    required InterfaceLanguage interfaceLanguage,
     bool repeatsDaily = false,
   }) async {
     await _plugin.zonedSchedule(
@@ -437,7 +448,10 @@ class NotificationScheduler implements FactNotificationScheduler {
       title: notification.title,
       body: notification.body,
       scheduledDate: tz.TZDateTime.from(notification.scheduledAt, tz.local),
-      notificationDetails: _notificationDetailsFor(notification.body),
+      notificationDetails: _notificationDetailsFor(
+        notification.body,
+        interfaceLanguage,
+      ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       matchDateTimeComponents: repeatsDaily ? DateTimeComponents.time : null,
       payload: NotificationTarget(
@@ -447,31 +461,50 @@ class NotificationScheduler implements FactNotificationScheduler {
     );
   }
 
-  NotificationDetails _notificationDetailsFor(String body) =>
-      NotificationDetails(
-        android: AndroidNotificationDetails(
-          'unebil_learning_facts',
-          'Learning facts',
-          channelDescription: 'Short learning facts for selected topics',
-          importance: Importance.high,
-          priority: Priority.high,
-          styleInformation: BigTextStyleInformation(body),
-        ),
-      );
+  NotificationDetails _notificationDetailsFor(
+    String body,
+    InterfaceLanguage language,
+  ) => NotificationDetails(
+    android: AndroidNotificationDetails(
+      'unebil_learning_facts',
+      _channelName(language),
+      channelDescription: _channelDescription(language),
+      importance: Importance.high,
+      priority: Priority.high,
+      styleInformation: BigTextStyleInformation(body),
+    ),
+  );
 
-  String _testTitle(AppLanguage language) {
+  String _channelName(InterfaceLanguage language) {
     return switch (language) {
-      AppLanguage.ru => 'Проверка UneBil',
-      AppLanguage.kk => 'UneBil тексеру',
-      AppLanguage.en => 'UneBil test',
+      InterfaceLanguage.kk => 'Оқу фактілері',
+      InterfaceLanguage.en => 'Learning facts',
+      InterfaceLanguage.ru => 'Обучающие факты',
     };
   }
 
-  String _testBody(AppLanguage language) {
+  String _channelDescription(InterfaceLanguage language) {
     return switch (language) {
-      AppLanguage.ru => 'Если ты видишь это, уведомления работают.',
-      AppLanguage.kk => 'Осы хабарлама көрінсе, ескертулер жұмыс істейді.',
-      AppLanguage.en => 'If you can see this, notifications are working.',
+      InterfaceLanguage.kk => 'Таңдалған тақырыптар бойынша қысқа фактілер',
+      InterfaceLanguage.en => 'Short learning facts for selected topics',
+      InterfaceLanguage.ru => 'Короткие факты по выбранным темам',
+    };
+  }
+
+  String _testTitle(InterfaceLanguage language) {
+    return switch (language) {
+      InterfaceLanguage.ru => 'Проверка UneBil',
+      InterfaceLanguage.kk => 'UneBil тексеруі',
+      InterfaceLanguage.en => 'UneBil test',
+    };
+  }
+
+  String _testBody(InterfaceLanguage language) {
+    return switch (language) {
+      InterfaceLanguage.ru => 'Если ты видишь это, уведомления работают.',
+      InterfaceLanguage.kk =>
+        'Осы хабарламаны көрсеңіз, хабарландырулар жұмыс істейді.',
+      InterfaceLanguage.en => 'If you can see this, notifications are working.',
     };
   }
 }
