@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../localization/app_strings.dart';
 import '../models/app_language.dart';
 import '../models/app_time_zone.dart';
+import '../models/interface_language.dart';
 import '../models/notification_length.dart';
 import '../models/notification_time.dart';
 import '../services/app_controller.dart';
@@ -17,13 +19,32 @@ class SettingsScreen extends StatelessWidget {
       animation: controller,
       builder: (context, _) {
         final settings = controller.settings;
+        final strings = AppStrings(settings.interfaceLanguage!);
         return Scaffold(
-          appBar: AppBar(title: const Text('Настройки')),
+          appBar: AppBar(title: Text(strings.settings)),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
             children: [
               _SettingsCard(
-                title: 'Язык фактов',
+                title: strings.interfaceLanguage,
+                child: SegmentedButton<InterfaceLanguage>(
+                  segments: InterfaceLanguage.values
+                      .map(
+                        (language) => ButtonSegment<InterfaceLanguage>(
+                          value: language,
+                          label: Text(language.label),
+                        ),
+                      )
+                      .toList(),
+                  selected: <InterfaceLanguage>{settings.interfaceLanguage!},
+                  onSelectionChanged: (selection) {
+                    controller.updateInterfaceLanguage(selection.first);
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsCard(
+                title: strings.factLanguage,
                 child: SegmentedButton<AppLanguage>(
                   segments: AppLanguage.values
                       .map(
@@ -35,24 +56,31 @@ class SettingsScreen extends StatelessWidget {
                       .toList(),
                   selected: <AppLanguage>{settings.language},
                   onSelectionChanged: (selection) {
-                    controller.updateLanguage(selection.first);
+                    controller.updateFactLanguage(selection.first);
                   },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                child: Text(
+                  strings.factLanguageHint,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
               const SizedBox(height: 12),
               _SettingsCard(
-                title: 'Time zone',
+                title: strings.timeZone,
                 child: DropdownButtonFormField<AppTimeZone>(
                   initialValue: settings.timeZone,
-                  decoration: const InputDecoration(
-                    labelText: 'Country',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: strings.country,
+                    border: const OutlineInputBorder(),
                   ),
                   items: AppTimeZone.values
                       .map(
                         (timeZone) => DropdownMenuItem<AppTimeZone>(
                           value: timeZone,
-                          child: Text(timeZone.label),
+                          child: Text(strings.timeZoneLabel(timeZone)),
                         ),
                       )
                       .toList(),
@@ -65,7 +93,7 @@ class SettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _SettingsCard(
-                title: 'Длина уведомления',
+                title: strings.notificationLength,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -74,7 +102,7 @@ class SettingsScreen extends StatelessWidget {
                           .map(
                             (length) => ButtonSegment<NotificationLength>(
                               value: length,
-                              label: Text(length.label),
+                              label: Text(strings.lengthLabel(length)),
                             ),
                           )
                           .toList(),
@@ -84,21 +112,21 @@ class SettingsScreen extends StatelessWidget {
                       },
                     ),
                     const SizedBox(height: 10),
-                    Text('Около ${settings.length.targetWords} слов'),
+                    Text(strings.aboutWords(settings.length.targetWords)),
                   ],
                 ),
               ),
               const SizedBox(height: 12),
               _SettingsCard(
-                title: 'Время уведомлений',
+                title: strings.notificationTimes,
                 child: Column(
                   children: [
                     if (settings.notificationTimes.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 12),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text('Уведомления не запланированы'),
+                          child: Text(strings.noNotificationTimes),
                         ),
                       )
                     else
@@ -108,7 +136,7 @@ class SettingsScreen extends StatelessWidget {
                           leading: const Icon(Icons.schedule),
                           title: Text(time.label),
                           trailing: IconButton(
-                            tooltip: 'Удалить время',
+                            tooltip: strings.deleteTime,
                             icon: const Icon(Icons.delete_outline),
                             onPressed: () {
                               controller.removeNotificationTime(time);
@@ -117,21 +145,20 @@ class SettingsScreen extends StatelessWidget {
                         ),
                       ),
                     if (settings.notificationTimes.isNotEmpty)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 12),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text(
-                            'Эти часы используются вместо интервала темы.',
-                          ),
+                          child: Text(strings.customTimesHint),
                         ),
                       ),
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
-                        onPressed: () => _pickTime(context, controller),
+                        onPressed: () =>
+                            _pickTime(context, controller, strings),
                         icon: const Icon(Icons.add_alarm),
-                        label: const Text('Добавить время'),
+                        label: Text(strings.addTime),
                       ),
                     ),
                   ],
@@ -139,13 +166,14 @@ class SettingsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _SettingsCard(
-                title: 'Проверка расписания',
+                title: strings.scheduleTest,
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.tonalIcon(
-                    onPressed: () => _sendTestNotification(context, controller),
+                    onPressed: () =>
+                        _sendTestNotification(context, controller, strings),
                     icon: const Icon(Icons.notifications_active_outlined),
-                    label: const Text('Запланировать факт через 15 секунд'),
+                    label: Text(strings.scheduleFactIn15Seconds),
                   ),
                 ),
               ),
@@ -189,7 +217,11 @@ TimeOfDay addHoursToTimeOfDay(TimeOfDay time, int hours) {
   return TimeOfDay(hour: totalMinutes ~/ 60, minute: totalMinutes % 60);
 }
 
-Future<void> _pickTime(BuildContext context, AppController controller) async {
+Future<void> _pickTime(
+  BuildContext context,
+  AppController controller,
+  AppStrings strings,
+) async {
   final now = TimeOfDay.now();
   final interval = await showModalBottomSheet<int>(
     context: context,
@@ -202,11 +234,11 @@ Future<void> _pickTime(BuildContext context, AppController controller) async {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Через сколько часов?',
+              strings.afterHowManyHours,
               style: Theme.of(sheetContext).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
-            const Text('Выбери интервал до уведомления'),
+            Text(strings.chooseNotificationDelay),
             const SizedBox(height: 16),
             Row(
               children: [
@@ -215,7 +247,7 @@ Future<void> _pickTime(BuildContext context, AppController controller) async {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(sheetContext, hours),
-                      child: Text('+$hours ч'),
+                      child: Text(strings.hoursShort(hours)),
                     ),
                   ),
                 ],
@@ -233,9 +265,9 @@ Future<void> _pickTime(BuildContext context, AppController controller) async {
   final picked = await showTimePicker(
     context: context,
     initialTime: addHoursToTimeOfDay(now, interval),
-    helpText: 'Выбери время',
-    cancelText: 'Отмена',
-    confirmText: 'Готово',
+    helpText: strings.chooseTime,
+    cancelText: strings.cancel,
+    confirmText: strings.done,
   );
   if (picked == null) {
     return;
@@ -249,6 +281,7 @@ Future<void> _pickTime(BuildContext context, AppController controller) async {
 Future<void> _sendTestNotification(
   BuildContext context,
   AppController controller,
+  AppStrings strings,
 ) async {
   final delivered = await controller.showTestNotification();
   if (!context.mounted) {
@@ -256,8 +289,8 @@ Future<void> _sendTestNotification(
   }
 
   final message = delivered
-      ? 'Факт запланирован через 15 секунд. Закрой приложение и подожди.'
-      : controller.lastError ?? 'Не удалось показать тестовое уведомление.';
+      ? strings.testScheduled
+      : controller.lastError ?? strings.testFailed;
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(message)));
