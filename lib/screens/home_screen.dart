@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../models/app_language.dart';
+import '../localization/app_strings.dart';
+import '../models/interface_language.dart';
 import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
@@ -17,12 +18,13 @@ class HomeScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) {
+        final strings = AppStrings(controller.settings.interfaceLanguage!);
         return Scaffold(
           appBar: AppBar(
             title: const Text('UneBil'),
             actions: [
               IconButton(
-                tooltip: 'Настройки',
+                tooltip: strings.settings,
                 icon: const Icon(Icons.tune),
                 onPressed: () {
                   Navigator.of(context).push(
@@ -40,7 +42,7 @@ class HomeScreen extends StatelessWidget {
           floatingActionButton: FloatingActionButton.extended(
             onPressed: () => _showTopicDialog(context, controller),
             icon: const Icon(Icons.add),
-            label: const Text('Тема'),
+            label: Text(strings.topic),
           ),
         );
       },
@@ -57,18 +59,22 @@ class _HomeContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final topics = controller.topics;
     final settings = controller.settings;
+    final strings = AppStrings(settings.interfaceLanguage!);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       children: [
         _SettingsSummary(
           language: settings.language.label,
-          length:
-              '${settings.length.label} · ${settings.length.targetWords} слов',
+          length: strings.aboutWords(settings.length.targetWords),
+          title: strings.homeSlogan,
         ),
         const SizedBox(height: 16),
         if (topics.isEmpty)
-          _EmptyTopics(onAdd: () => _showTopicDialog(context, controller))
+          _EmptyTopics(
+            strings: strings,
+            onAdd: () => _showTopicDialog(context, controller),
+          )
         else
           ...topics.map(
             (topic) => Padding(
@@ -77,8 +83,9 @@ class _HomeContent extends StatelessWidget {
                 topic: topic,
                 factCount: controller.factsForTopic(topic.id).length,
                 intervalLabel: topic.notificationInterval.label(
-                  settings.language,
+                  settings.interfaceLanguage!,
                 ),
+                strings: strings,
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
@@ -103,10 +110,15 @@ class _HomeContent extends StatelessWidget {
 }
 
 class _SettingsSummary extends StatelessWidget {
-  const _SettingsSummary({required this.language, required this.length});
+  const _SettingsSummary({
+    required this.language,
+    required this.length,
+    required this.title,
+  });
 
   final String language;
   final String length;
+  final String title;
 
   @override
   Widget build(BuildContext context) {
@@ -116,10 +128,7 @@ class _SettingsSummary extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Сегодня учим маленькими шагами',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -153,8 +162,9 @@ class _InfoChip extends StatelessWidget {
 }
 
 class _EmptyTopics extends StatelessWidget {
-  const _EmptyTopics({required this.onAdd});
+  const _EmptyTopics({required this.strings, required this.onAdd});
 
+  final AppStrings strings;
   final VoidCallback onAdd;
 
   @override
@@ -171,19 +181,16 @@ class _EmptyTopics extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             Text(
-              'Добавь первую тему',
+              strings.addFirstTopic,
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Напиши то, что давно хотел понять: космос, бизнес, история, английский или любую другую идею.',
-              textAlign: TextAlign.center,
-            ),
+            Text(strings.emptyTopicsBody, textAlign: TextAlign.center),
             const SizedBox(height: 18),
             FilledButton.icon(
               onPressed: onAdd,
               icon: const Icon(Icons.add),
-              label: const Text('Добавить тему'),
+              label: Text(strings.addTopic),
             ),
           ],
         ),
@@ -197,6 +204,7 @@ class _TopicTile extends StatelessWidget {
     required this.topic,
     required this.factCount,
     required this.intervalLabel,
+    required this.strings,
     required this.onTap,
     required this.onToggle,
     required this.onEdit,
@@ -206,6 +214,7 @@ class _TopicTile extends StatelessWidget {
   final Topic topic;
   final int factCount;
   final String intervalLabel;
+  final AppStrings strings;
   final VoidCallback onTap;
   final ValueChanged<bool> onToggle;
   final VoidCallback onEdit;
@@ -220,8 +229,8 @@ class _TopicTile extends StatelessWidget {
         title: Text(topic.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
           topic.enabled
-              ? '$factCount фактов · $intervalLabel'
-              : '$factCount фактов · уведомления выключены',
+              ? '${strings.factsCount(factCount)} · $intervalLabel'
+              : '${strings.factsCount(factCount)} · ${strings.notificationsOff}',
         ),
         leading: Switch(value: topic.enabled, onChanged: onToggle),
         trailing: PopupMenuButton<String>(
@@ -233,12 +242,12 @@ class _TopicTile extends StatelessWidget {
               onDelete();
             }
           },
-          itemBuilder: (context) => const [
+          itemBuilder: (context) => [
             PopupMenuItem(
               value: 'edit',
-              child: Text('Изменить тему и интервал'),
+              child: Text(strings.editTopicAndInterval),
             ),
-            PopupMenuItem(value: 'delete', child: Text('Удалить')),
+            PopupMenuItem(value: 'delete', child: Text(strings.delete)),
           ],
         ),
       ),
@@ -256,7 +265,7 @@ Future<void> _showTopicDialog(
     builder: (_) => _TopicDialog(
       initialTitle: existingTopic?.title,
       initialInterval: existingTopic?.notificationInterval,
-      language: controller.settings.language,
+      language: controller.settings.interfaceLanguage!,
     ),
   );
 
@@ -283,7 +292,7 @@ class _TopicDialog extends StatefulWidget {
 
   final String? initialTitle;
   final NotificationInterval? initialInterval;
-  final AppLanguage language;
+  final InterfaceLanguage language;
 
   @override
   State<_TopicDialog> createState() => _TopicDialogState();
@@ -308,9 +317,10 @@ class _TopicDialogState extends State<_TopicDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings(widget.language);
     final isEditing = widget.initialTitle != null;
-    final title = isEditing ? 'Изменить тему и интервал' : 'Новая тема';
-    final action = isEditing ? 'Сохранить' : 'Добавить';
+    final title = isEditing ? strings.editTopicAndInterval : strings.newTopic;
+    final action = isEditing ? strings.save : strings.add;
 
     return AlertDialog(
       title: Text(title),
@@ -321,9 +331,9 @@ class _TopicDialogState extends State<_TopicDialog> {
             controller: _textController,
             autofocus: true,
             textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              labelText: 'Тема',
-              hintText: 'Например: космос',
+            decoration: InputDecoration(
+              labelText: strings.topic,
+              hintText: strings.topicExample,
             ),
             onSubmitted: (_) => _submit(),
           ),
@@ -353,7 +363,7 @@ class _TopicDialogState extends State<_TopicDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Отмена'),
+          child: Text(strings.cancel),
         ),
         FilledButton(onPressed: _submit, child: Text(action)),
       ],
