@@ -13,7 +13,7 @@ class AiClient implements FactGenerator {
     http.Client? client,
     this.baseUrl = const String.fromEnvironment(
       'API_BASE_URL',
-      defaultValue: 'http://10.0.2.2:3000',
+      defaultValue: '',
     ),
   }) : _client = client ?? http.Client();
 
