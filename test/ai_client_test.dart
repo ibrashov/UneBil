@@ -10,6 +10,31 @@ import 'package:unebil/services/ai_client.dart';
 import 'package:unebil/services/fact_generator.dart';
 
 void main() {
+  test('fails clearly when API_BASE_URL is not configured', () async {
+    var requestSent = false;
+    final client = MockClient((_) async {
+      requestSent = true;
+      return http.Response('{}', 200);
+    });
+    final aiClient = AiClient(client: client, baseUrl: '  ');
+
+    await expectLater(
+      aiClient.generateFacts(
+        topic: 'Animals',
+        language: AppLanguage.en,
+        length: NotificationLength.short,
+      ),
+      throwsA(
+        isA<FactGenerationException>().having(
+          (error) => error.message,
+          'message',
+          contains('API_BASE_URL'),
+        ),
+      ),
+    );
+    expect(requestSent, isFalse);
+  });
+
   test(
     'sends the complete exclusion payload and parses the fact key',
     () async {
