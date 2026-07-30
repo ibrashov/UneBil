@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../localization/app_strings.dart';
 import '../models/app_language.dart';
+import '../models/app_theme_mode.dart';
 import '../models/app_time_zone.dart';
 import '../models/interface_language.dart';
 import '../models/notification_length.dart';
 import '../models/notification_time.dart';
 import '../services/app_controller.dart';
+import '../widgets/responsive_segmented_control.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.controller});
@@ -27,37 +29,33 @@ class SettingsScreen extends StatelessWidget {
             children: [
               _SettingsCard(
                 title: strings.interfaceLanguage,
-                child: SegmentedButton<InterfaceLanguage>(
+                child: ResponsiveSegmentedControl<InterfaceLanguage>(
                   segments: InterfaceLanguage.values
                       .map(
-                        (language) => ButtonSegment<InterfaceLanguage>(
+                        (language) => ResponsiveSegment<InterfaceLanguage>(
                           value: language,
-                          label: Text(language.label),
+                          label: language.label,
                         ),
                       )
                       .toList(),
-                  selected: <InterfaceLanguage>{settings.interfaceLanguage!},
-                  onSelectionChanged: (selection) {
-                    controller.updateInterfaceLanguage(selection.first);
-                  },
+                  selected: settings.interfaceLanguage!,
+                  onSelectionChanged: controller.updateInterfaceLanguage,
                 ),
               ),
               const SizedBox(height: 12),
               _SettingsCard(
                 title: strings.factLanguage,
-                child: SegmentedButton<AppLanguage>(
+                child: ResponsiveSegmentedControl<AppLanguage>(
                   segments: AppLanguage.values
                       .map(
-                        (language) => ButtonSegment<AppLanguage>(
+                        (language) => ResponsiveSegment<AppLanguage>(
                           value: language,
-                          label: Text(language.label),
+                          label: language.label,
                         ),
                       )
                       .toList(),
-                  selected: <AppLanguage>{settings.language},
-                  onSelectionChanged: (selection) {
-                    controller.updateFactLanguage(selection.first);
-                  },
+                  selected: settings.language,
+                  onSelectionChanged: controller.updateFactLanguage,
                 ),
               ),
               Padding(
@@ -65,6 +63,22 @@ class SettingsScreen extends StatelessWidget {
                 child: Text(
                   strings.factLanguageHint,
                   style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _SettingsCard(
+                title: strings.appearance,
+                child: ResponsiveSegmentedControl<AppThemeMode>(
+                  segments: AppThemeMode.values
+                      .map(
+                        (mode) => ResponsiveSegment<AppThemeMode>(
+                          value: mode,
+                          label: strings.themeModeLabel(mode),
+                        ),
+                      )
+                      .toList(),
+                  selected: settings.themeMode,
+                  onSelectionChanged: controller.updateThemeMode,
                 ),
               ),
               const SizedBox(height: 12),
@@ -97,70 +111,20 @@ class SettingsScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SegmentedButton<NotificationLength>(
+                    ResponsiveSegmentedControl<NotificationLength>(
                       segments: NotificationLength.values
                           .map(
-                            (length) => ButtonSegment<NotificationLength>(
+                            (length) => ResponsiveSegment<NotificationLength>(
                               value: length,
-                              label: Text(strings.lengthLabel(length)),
+                              label: strings.lengthLabel(length),
                             ),
                           )
                           .toList(),
-                      selected: <NotificationLength>{settings.length},
-                      onSelectionChanged: (selection) {
-                        controller.updateLength(selection.first);
-                      },
+                      selected: settings.length,
+                      onSelectionChanged: controller.updateLength,
                     ),
                     const SizedBox(height: 10),
                     Text(strings.aboutWords(settings.length.targetWords)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _SettingsCard(
-                title: strings.notificationTimes,
-                child: Column(
-                  children: [
-                    if (settings.notificationTimes.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(strings.noNotificationTimes),
-                        ),
-                      )
-                    else
-                      ...settings.notificationTimes.map(
-                        (time) => ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.schedule),
-                          title: Text(time.label),
-                          trailing: IconButton(
-                            tooltip: strings.deleteTime,
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () {
-                              controller.removeNotificationTime(time);
-                            },
-                          ),
-                        ),
-                      ),
-                    if (settings.notificationTimes.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(strings.customTimesHint),
-                        ),
-                      ),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () =>
-                            _pickTime(context, controller, strings),
-                        icon: const Icon(Icons.add_alarm),
-                        label: Text(strings.addTime),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -217,6 +181,8 @@ TimeOfDay addHoursToTimeOfDay(TimeOfDay time, int hours) {
   return TimeOfDay(hour: totalMinutes ~/ 60, minute: totalMinutes % 60);
 }
 
+// Kept for the existing custom-time flow, which is currently not shown.
+// ignore: unused_element
 Future<void> _pickTime(
   BuildContext context,
   AppController controller,
