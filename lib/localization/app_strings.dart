@@ -1,4 +1,5 @@
 import '../models/app_time_zone.dart';
+import '../models/app_theme_mode.dart';
 import '../models/interface_language.dart';
 import '../models/notification_interval.dart';
 import '../models/notification_length.dart';
@@ -13,6 +14,15 @@ class AppStrings {
       _pick('Қолданба тілі', 'App language', 'Язык приложения');
   String get factLanguage =>
       _pick('Фактілер тілі', 'Fact language', 'Язык фактов');
+  String get appearance => _pick('Сыртқы көрініс', 'Appearance', 'Оформление');
+  String themeModeLabel(AppThemeMode mode) {
+    return switch (mode) {
+      AppThemeMode.system => _pick('Жүйелік', 'System', 'Системная'),
+      AppThemeMode.light => _pick('Жарық', 'Light', 'Светлая'),
+      AppThemeMode.dark => _pick('Қараңғы', 'Dark', 'Тёмная'),
+    };
+  }
+
   String get factLanguageHint => _pick(
     'Бұл тіл тек жаңа фактілерді жасауға қолданылады.',
     'This language is used only to generate new facts.',
