@@ -1,4 +1,5 @@
 import 'app_language.dart';
+import 'app_theme_mode.dart';
 import 'app_time_zone.dart';
 import 'interface_language.dart';
 import 'notification_length.dart';
@@ -9,6 +10,7 @@ class AppSettings {
     required this.language,
     required this.length,
     this.interfaceLanguage,
+    this.themeMode = AppThemeMode.system,
     this.timeZone = AppTimeZone.kazakhstan,
     this.notificationTimes = const <NotificationTime>[],
   });
@@ -16,6 +18,7 @@ class AppSettings {
   final AppLanguage language;
   final NotificationLength length;
   final InterfaceLanguage? interfaceLanguage;
+  final AppThemeMode themeMode;
   final AppTimeZone timeZone;
   final List<NotificationTime> notificationTimes;
 
@@ -23,6 +26,7 @@ class AppSettings {
     language: AppLanguage.ru,
     length: NotificationLength.medium,
     interfaceLanguage: null,
+    themeMode: AppThemeMode.system,
     timeZone: AppTimeZone.kazakhstan,
     notificationTimes: <NotificationTime>[],
   );
@@ -47,6 +51,7 @@ class AppSettings {
       interfaceLanguage: InterfaceLanguage.tryFromCode(
         json['interfaceLanguage'] as String?,
       ),
+      themeMode: AppThemeMode.fromId(json['themeMode'] as String?),
       timeZone: AppTimeZone.fromId(json['timeZone'] as String?),
       notificationTimes: List<NotificationTime>.unmodifiable(times),
     );
@@ -56,6 +61,7 @@ class AppSettings {
     'language': language.code,
     'lengthMode': length.id,
     if (interfaceLanguage != null) 'interfaceLanguage': interfaceLanguage!.code,
+    'themeMode': themeMode.id,
     'timeZone': timeZone.id,
     'notificationTimes': notificationTimes
         .map((time) => time.toJson())
@@ -66,6 +72,7 @@ class AppSettings {
     AppLanguage? language,
     NotificationLength? length,
     InterfaceLanguage? interfaceLanguage,
+    AppThemeMode? themeMode,
     AppTimeZone? timeZone,
     List<NotificationTime>? notificationTimes,
   }) {
@@ -77,6 +84,7 @@ class AppSettings {
       language: language ?? this.language,
       length: length ?? this.length,
       interfaceLanguage: interfaceLanguage ?? this.interfaceLanguage,
+      themeMode: themeMode ?? this.themeMode,
       timeZone: timeZone ?? this.timeZone,
       notificationTimes: List<NotificationTime>.unmodifiable(nextTimes),
     );
