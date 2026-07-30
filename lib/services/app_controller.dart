@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../localization/app_strings.dart';
 import '../models/app_language.dart';
 import '../models/app_settings.dart';
+import '../models/app_theme_mode.dart';
 import '../models/app_time_zone.dart';
 import '../models/interface_language.dart';
 import '../models/learning_fact.dart';
@@ -255,6 +256,12 @@ class AppController extends ChangeNotifier {
 
   Future<void> updateLength(NotificationLength length) {
     return updateSettings(_settings.copyWith(length: length));
+  }
+
+  Future<void> updateThemeMode(AppThemeMode themeMode) async {
+    _settings = _settings.copyWith(themeMode: themeMode);
+    await _storage.saveSettings(_settings);
+    notifyListeners();
   }
 
   Future<void> updateTimeZone(AppTimeZone timeZone) {
