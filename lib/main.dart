@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'core/theme/app_theme.dart';
 import 'models/interface_language.dart';
 import 'services/ai_client.dart';
 import 'services/app_controller.dart';
@@ -110,24 +111,9 @@ class _UneBilAppState extends State<UneBilApp> {
               .map((language) => Locale(language.code))
               .toList(growable: false),
           localizationsDelegates: GlobalMaterialLocalizations.delegates,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: const Color(0xFF2563EB),
-              brightness: Brightness.light,
-            ),
-            scaffoldBackgroundColor: const Color(0xFFF7F8FA),
-            appBarTheme: const AppBarTheme(centerTitle: false),
-            cardTheme: CardThemeData(
-              elevation: 0,
-              color: Colors.white,
-              margin: EdgeInsets.zero,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.all(Radius.circular(8)),
-                side: BorderSide(color: Color(0xFFE5E7EB)),
-              ),
-            ),
-          ),
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: widget.controller.settings.themeMode.materialThemeMode,
           home: interfaceLanguage == null
               ? LanguageSelectionScreen(controller: widget.controller)
               : HomeScreen(controller: widget.controller),
