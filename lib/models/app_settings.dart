@@ -11,7 +11,7 @@ class AppSettings {
     required this.length,
     this.interfaceLanguage,
     this.themeMode = AppThemeMode.system,
-    this.timeZone = AppTimeZone.kazakhstan,
+    this.timeZone = AppTimeZone.device,
     this.notificationTimes = const <NotificationTime>[],
   });
 
@@ -27,7 +27,7 @@ class AppSettings {
     length: NotificationLength.medium,
     interfaceLanguage: null,
     themeMode: AppThemeMode.system,
-    timeZone: AppTimeZone.kazakhstan,
+    timeZone: AppTimeZone.device,
     notificationTimes: <NotificationTime>[],
   );
 
@@ -52,7 +52,12 @@ class AppSettings {
         json['interfaceLanguage'] as String?,
       ),
       themeMode: AppThemeMode.fromId(json['themeMode'] as String?),
-      timeZone: AppTimeZone.fromId(json['timeZone'] as String?),
+      // Older builds always stored Kazakhstan even when the user had never
+      // selected a zone. Migrate once to device time so every country gets
+      // its own local 07:00; explicit choices made in this build are kept.
+      timeZone: json['timeZoneBehaviorVersion'] == 1
+          ? AppTimeZone.fromId(json['timeZone'] as String?)
+          : AppTimeZone.device,
       notificationTimes: List<NotificationTime>.unmodifiable(times),
     );
   }
@@ -63,6 +68,7 @@ class AppSettings {
     if (interfaceLanguage != null) 'interfaceLanguage': interfaceLanguage!.code,
     'themeMode': themeMode.id,
     'timeZone': timeZone.id,
+    'timeZoneBehaviorVersion': 1,
     'notificationTimes': notificationTimes
         .map((time) => time.toJson())
         .toList(growable: false),
