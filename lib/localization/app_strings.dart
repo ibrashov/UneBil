@@ -30,6 +30,11 @@ class AppStrings {
   );
   String get timeZone => _pick('Уақыт белдеуі', 'Time zone', 'Часовой пояс');
   String get country => _pick('Ел', 'Country', 'Страна');
+  String get quietHoursHint => _pick(
+    'Хабарландырулар таңдалған уақыт белдеуінде 00:00-ден 07:00-ге дейін келмейді.',
+    'Notifications are paused from 00:00 to 07:00 in the selected time zone.',
+    'С 00:00 до 07:00 уведомления не приходят по выбранному часовому поясу.',
+  );
   String get notificationLength =>
       _pick('Факт ұзындығы', 'Fact length', 'Длина факта');
   String aboutWords(int count) =>
@@ -105,6 +110,16 @@ class AppStrings {
     'хабарландырулар өшірулі',
     'notifications are off',
     'уведомления выключены',
+  );
+  String get topicNotifications => _pick(
+    'Тақырып хабарландырулары',
+    'Topic notifications',
+    'Уведомления темы',
+  );
+  String get topicNotificationsOn => _pick(
+    'Фактілер осы тақырып бойынша келеді',
+    'Facts from this topic will be delivered',
+    'Факты по этой теме будут приходить',
   );
   String get editTopicAndInterval => _pick(
     'Тақырып пен аралықты өзгерту',
@@ -198,6 +213,11 @@ class AppStrings {
 
   String timeZoneLabel(AppTimeZone timeZone) {
     return switch (timeZone) {
+      AppTimeZone.device => _pick(
+        'Телефон уақыты',
+        'Device time',
+        'По времени телефона',
+      ),
       AppTimeZone.kazakhstan => _pick('Қазақстан', 'Kazakhstan', 'Казахстан'),
       AppTimeZone.china => _pick('Қытай', 'China', 'Китай'),
       AppTimeZone.spain => _pick('Испания', 'Spain', 'Испания'),
