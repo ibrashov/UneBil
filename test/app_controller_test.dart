@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:unebil/models/app_language.dart';
 import 'package:unebil/models/app_settings.dart';
+import 'package:unebil/models/app_theme_mode.dart';
+import 'package:unebil/models/app_time_zone.dart';
 import 'package:unebil/models/interface_language.dart';
 import 'package:unebil/models/learning_fact.dart';
 import 'package:unebil/models/notification_interval.dart';
@@ -15,6 +17,8 @@ import 'package:unebil/services/app_controller.dart';
 import 'package:unebil/services/fact_generator.dart';
 import 'package:unebil/services/notification_scheduler.dart';
 import 'package:unebil/services/storage_service.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 
 void main() {
   test('notification length modes map to expected word targets', () {
@@ -180,7 +184,7 @@ void main() {
       now: DateTime.utc(2026, 7, 10),
       notificationsPerTopic: 2,
     );
-    expect(anchoredPlan.first.scheduledAt, DateTime.utc(2026, 7, 10, 0, 30));
+    expect(anchoredPlan.first.scheduledAt, DateTime.utc(2026, 7, 10, 7));
 
     final resumedPlan = buildIntervalNotificationPlan(
       settings: const AppSettings(
@@ -192,7 +196,7 @@ void main() {
       now: DateTime.utc(2026, 7, 10, 3, 35),
       notificationsPerTopic: 1,
     );
-    expect(resumedPlan.single.scheduledAt, DateTime.utc(2026, 7, 10, 4, 30));
+    expect(resumedPlan.single.scheduledAt, DateTime.utc(2026, 7, 10, 7));
 
     final fallbackPlan = buildIntervalNotificationPlan(
       settings: const AppSettings(
@@ -244,6 +248,99 @@ void main() {
     expect(dailyPlan[0].scheduledAt, DateTime.utc(2026, 7, 11, 9));
     expect(dailyPlan[1].scheduledAt, DateTime.utc(2026, 7, 10, 18, 30));
     expect(dailyPlan.map((item) => item.id), <int>[1000, 1001]);
+  });
+
+  test('skips quiet hours and resumes once at 07:00 in each time zone', () {
+    tz_data.initializeTimeZones();
+    final madrid = tz.getLocation('Europe/Madrid');
+    final almaty = tz.getLocation('Asia/Almaty');
+    final topic = Topic(
+      id: 'history',
+      title: 'History',
+      enabled: true,
+      createdAt: DateTime.utc(2026, 7, 1),
+      notificationInterval: NotificationInterval.hourly,
+      notificationId: NotificationScheduler.topicNotificationIdStart,
+    );
+    final fact = LearningFact(
+      id: 'history-fact',
+      topicId: topic.id,
+      topicTitle: topic.title,
+      title: 'History fact',
+      body: 'A cached history fact.',
+      language: AppLanguage.en,
+      length: NotificationLength.medium,
+      createdAt: DateTime.utc(2026, 7, 1),
+    );
+
+    List<PlannedFactNotification> planFor(tz.Location location) {
+      final now = tz.TZDateTime(location, 2026, 7, 10, 22, 30);
+      return buildIntervalNotificationPlan(
+        settings: const AppSettings(
+          language: AppLanguage.en,
+          length: NotificationLength.medium,
+        ),
+        topics: <Topic>[
+          topic.copyWith(
+            nextNotificationAt: tz.TZDateTime(location, 2026, 7, 10, 23),
+          ),
+        ],
+        facts: <LearningFact>[fact],
+        now: now,
+        notificationsPerTopic: 3,
+      );
+    }
+
+    final madridPlan = planFor(madrid);
+    final almatyPlan = planFor(almaty);
+    for (final plan in <List<PlannedFactNotification>>[
+      madridPlan,
+      almatyPlan,
+    ]) {
+      expect(plan.map((item) => item.scheduledAt.hour), <int>[23, 7, 8]);
+      expect(plan[1].scheduledAt.day, 11);
+      expect(plan.map((item) => item.scheduledAt.hour), isNot(contains(0)));
+    }
+    expect(madridPlan[1].scheduledAt.toUtc().hour, 5);
+    expect(almatyPlan[1].scheduledAt.toUtc().hour, 2);
+  });
+
+  test('drops custom notification times that fall inside quiet hours', () {
+    final topic = Topic(
+      id: 'history',
+      title: 'History',
+      enabled: true,
+      createdAt: DateTime.utc(2026, 7, 1),
+      notificationId: NotificationScheduler.topicNotificationIdStart,
+    );
+    final fact = LearningFact(
+      id: 'history-fact',
+      topicId: topic.id,
+      topicTitle: topic.title,
+      title: 'History fact',
+      body: 'A cached history fact.',
+      language: AppLanguage.en,
+      length: NotificationLength.medium,
+      createdAt: DateTime.utc(2026, 7, 1),
+    );
+
+    final plan = buildIntervalNotificationPlan(
+      settings: const AppSettings(
+        language: AppLanguage.en,
+        length: NotificationLength.medium,
+        timeZone: AppTimeZone.device,
+        notificationTimes: <NotificationTime>[
+          NotificationTime(hour: 3, minute: 0),
+          NotificationTime(hour: 7, minute: 0),
+          NotificationTime(hour: 18, minute: 0),
+        ],
+      ),
+      topics: <Topic>[topic],
+      facts: <LearningFact>[fact],
+      now: DateTime.utc(2026, 7, 10, 1),
+    );
+
+    expect(plan.map((item) => item.scheduledAt.hour), <int>[7, 18]);
   });
 
   test('notification payload preserves the exact fact destination', () {
@@ -613,6 +710,7 @@ void main() {
     await controller.updateInterfaceLanguage(InterfaceLanguage.en);
     await controller.updateLanguage(AppLanguage.kk);
     await controller.updateLength(NotificationLength.detailed);
+    await controller.updateThemeMode(AppThemeMode.dark);
     await controller.addNotificationTime(
       const NotificationTime(hour: 18, minute: 50),
     );
@@ -627,10 +725,19 @@ void main() {
     expect(loaded.interfaceLanguage, InterfaceLanguage.en);
     expect(loaded.language, AppLanguage.kk);
     expect(loaded.length, NotificationLength.detailed);
+    expect(loaded.themeMode, AppThemeMode.dark);
     expect(loaded.notificationTimes, const <NotificationTime>[
       NotificationTime(hour: 9, minute: 15),
       NotificationTime(hour: 18, minute: 50),
     ]);
+
+    final restoredController = AppController(
+      StorageService(prefs),
+      FakeFactGenerator(),
+      RecordingScheduler(),
+    );
+    await restoredController.load();
+    expect(restoredController.settings.themeMode, AppThemeMode.dark);
 
     await controller.removeNotificationTime(
       const NotificationTime(hour: 9, minute: 15),
@@ -681,7 +788,16 @@ void main() {
 
     expect(plan, hasLength(NotificationScheduler.notificationsPerTopic));
     expect(plan.first.factId, fact.id);
-    expect(plan.first.scheduledAt, topic.nextNotificationAt);
+    final nextNotificationAt = topic.nextNotificationAt!;
+    final expectedFirst = nextNotificationAt.hour < 7
+        ? DateTime(
+            nextNotificationAt.year,
+            nextNotificationAt.month,
+            nextNotificationAt.day,
+            7,
+          )
+        : nextNotificationAt;
+    expect(plan.first.scheduledAt, expectedFirst);
     expect(
       plan[1].scheduledAt.difference(plan.first.scheduledAt),
       NotificationInterval.everyTwoHours.duration,
