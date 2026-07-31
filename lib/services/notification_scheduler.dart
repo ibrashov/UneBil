@@ -98,9 +98,10 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
     }
 
     final interval = topic.notificationInterval.duration;
-    final firstScheduledAt = _nextScheduledAt(topic, now);
+    var scheduledAt = _nextAllowedNotificationTime(
+      _nextScheduledAt(topic, now),
+    );
     for (var slot = 0; slot < notificationsPerTopic; slot += 1) {
-      final scheduledAt = firstScheduledAt.add(interval * slot);
       final rotationIndex =
           (scheduledAt.millisecondsSinceEpoch ~/ interval.inMilliseconds) %
           topicFacts.length;
@@ -115,6 +116,7 @@ List<PlannedFactNotification> buildIntervalNotificationPlan({
           body: fact.body,
         ),
       );
+      scheduledAt = _nextAllowedNotificationTime(scheduledAt.add(interval));
     }
   }
 
@@ -141,9 +143,13 @@ List<PlannedFactNotification> _buildDailyNotificationPlan({
   }
 
   final planned = <PlannedFactNotification>[];
-  final times = settings.notificationTimes.take(
-    NotificationScheduler.maxDailyNotificationTimes,
-  );
+  final times = settings.notificationTimes
+      .where(
+        (time) =>
+            time.hour < NotificationScheduler.quietHoursStart ||
+            time.hour >= NotificationScheduler.quietHoursEnd,
+      )
+      .take(NotificationScheduler.maxDailyNotificationTimes);
   var index = 0;
   for (final time in times) {
     final notificationIndex = index;
@@ -191,7 +197,10 @@ DateTime _nextInstanceOf(NotificationTime time, DateTime now) {
 
 DateTime _nextScheduledAt(Topic topic, DateTime now) {
   final interval = topic.notificationInterval.duration;
-  final anchor = topic.nextNotificationAt ?? now.add(interval);
+  final anchor = _inTimeZoneOf(
+    topic.nextNotificationAt ?? now.add(interval),
+    now,
+  );
   if (anchor.isAfter(now)) {
     return anchor;
   }
@@ -199,6 +208,43 @@ DateTime _nextScheduledAt(Topic topic, DateTime now) {
   final elapsedIntervals =
       now.difference(anchor).inMilliseconds ~/ interval.inMilliseconds;
   return anchor.add(interval * (elapsedIntervals + 1));
+}
+
+DateTime _nextAllowedNotificationTime(DateTime value) {
+  if (value.hour >= NotificationScheduler.quietHoursEnd) {
+    return value;
+  }
+
+  if (value is tz.TZDateTime) {
+    return tz.TZDateTime(
+      value.location,
+      value.year,
+      value.month,
+      value.day,
+      NotificationScheduler.quietHoursEnd,
+    );
+  }
+  if (value.isUtc) {
+    return DateTime.utc(
+      value.year,
+      value.month,
+      value.day,
+      NotificationScheduler.quietHoursEnd,
+    );
+  }
+  return DateTime(
+    value.year,
+    value.month,
+    value.day,
+    NotificationScheduler.quietHoursEnd,
+  );
+}
+
+DateTime _inTimeZoneOf(DateTime value, DateTime reference) {
+  if (reference is tz.TZDateTime) {
+    return tz.TZDateTime.from(value, reference.location);
+  }
+  return reference.isUtc ? value.toUtc() : value.toLocal();
 }
 
 List<LearningFact> _notificationFactsForTopic(
@@ -250,11 +296,15 @@ class NotificationScheduler implements FactNotificationScheduler {
   static const dailyNotificationIdStart = 1000;
   static const topicNotificationIdStart = 10000;
   static const testNotificationId = 9000;
+  static const quietHoursStart = 0;
+  static const quietHoursEnd = 7;
 
   final FlutterLocalNotificationsPlugin _plugin;
   final StreamController<NotificationTarget> _notificationTaps =
       StreamController<NotificationTarget>.broadcast(sync: true);
   bool _initialized = false;
+  String _deviceTimeZoneName = 'UTC';
+  bool _canScheduleExactNotifications = false;
   Future<void> _scheduleQueue = Future<void>.value();
 
   @override
@@ -266,7 +316,8 @@ class NotificationScheduler implements FactNotificationScheduler {
     tz.initializeTimeZones();
     try {
       final localTimezone = await FlutterTimezone.getLocalTimezone();
-      tz.setLocalLocation(tz.getLocation(localTimezone.identifier));
+      _deviceTimeZoneName = localTimezone.identifier;
+      tz.setLocalLocation(tz.getLocation(_deviceTimeZoneName));
     } catch (_) {
       tz.setLocalLocation(tz.UTC);
     }
@@ -284,7 +335,12 @@ class NotificationScheduler implements FactNotificationScheduler {
       },
     );
     _initialized = true;
-    await _ensureNotificationsAllowed(requestPermission: true);
+    final notificationsAllowed = await _ensureNotificationsAllowed(
+      requestPermission: true,
+    );
+    if (notificationsAllowed) {
+      await _ensureExactAlarmsAllowed(requestPermission: true);
+    }
   }
 
   @override
@@ -409,7 +465,32 @@ class NotificationScheduler implements FactNotificationScheduler {
   }
 
   void _useTimeZone(AppSettings settings) {
-    tz.setLocalLocation(tz.getLocation(settings.timeZone.locationName));
+    final locationName = settings.timeZone.locationName ?? _deviceTimeZoneName;
+    try {
+      tz.setLocalLocation(tz.getLocation(locationName));
+    } catch (_) {
+      tz.setLocalLocation(tz.UTC);
+    }
+  }
+
+  Future<bool> _ensureExactAlarmsAllowed({
+    required bool requestPermission,
+  }) async {
+    final android = _androidPlugin;
+    if (android == null) {
+      _canScheduleExactNotifications = true;
+      return true;
+    }
+
+    var allowed = await android.canScheduleExactNotifications() ?? true;
+    if (!allowed && requestPermission) {
+      allowed = await android.requestExactAlarmsPermission() ?? false;
+      if (allowed) {
+        allowed = await android.canScheduleExactNotifications() ?? true;
+      }
+    }
+    _canScheduleExactNotifications = allowed;
+    return allowed;
   }
 
   Future<bool> _ensureNotificationsAllowed({
@@ -451,7 +532,9 @@ class NotificationScheduler implements FactNotificationScheduler {
         notification.body,
         interfaceLanguage,
       ),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: _canScheduleExactNotifications
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle,
       matchDateTimeComponents: repeatsDaily ? DateTimeComponents.time : null,
       payload: NotificationTarget(
         topicId: notification.topicId,
