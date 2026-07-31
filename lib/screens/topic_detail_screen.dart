@@ -62,6 +62,9 @@ class TopicDetailScreen extends StatelessWidget {
                 ),
                 selectedInterval: topic.notificationInterval,
                 strings: strings,
+                onEnabledChanged: (enabled) {
+                  controller.toggleTopic(topic.id, enabled);
+                },
                 onIntervalChanged: (interval) {
                   controller.updateTopicInterval(topic.id, interval);
                 },
@@ -144,6 +147,7 @@ class _TopicHeader extends StatelessWidget {
     required this.interval,
     required this.selectedInterval,
     required this.strings,
+    required this.onEnabledChanged,
     required this.onIntervalChanged,
     required this.generating,
     required this.onGenerate,
@@ -155,6 +159,7 @@ class _TopicHeader extends StatelessWidget {
   final String interval;
   final NotificationInterval selectedInterval;
   final AppStrings strings;
+  final ValueChanged<bool> onEnabledChanged;
   final ValueChanged<NotificationInterval> onIntervalChanged;
   final bool generating;
   final VoidCallback onGenerate;
@@ -191,6 +196,18 @@ class _TopicHeader extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(strings.topicNotifications),
+              subtitle: Text(
+                topic.enabled
+                    ? strings.topicNotificationsOn
+                    : strings.topicNotificationsOff,
+              ),
+              value: topic.enabled,
+              onChanged: onEnabledChanged,
+            ),
+            const SizedBox(height: 8),
             InputDecorator(
               decoration: InputDecoration(
                 labelText: strings.notificationFrequency,
@@ -286,13 +303,20 @@ class _NotificationSchedule extends StatelessWidget {
   }
 
   static String _formatDateTime(DateTime value, AppTimeZone timeZone) {
+    if (timeZone == AppTimeZone.device) {
+      final localValue = value.toLocal();
+      String twoDigits(int number) => number.toString().padLeft(2, '0');
+      return '${twoDigits(localValue.day)}.${twoDigits(localValue.month)}.'
+          '${localValue.year}, '
+          '${twoDigits(localValue.hour)}:${twoDigits(localValue.minute)}';
+    }
     if (!_timeZonesInitialized) {
       tz_data.initializeTimeZones();
       _timeZonesInitialized = true;
     }
     final zonedValue = tz.TZDateTime.from(
       value,
-      tz.getLocation(timeZone.locationName),
+      tz.getLocation(timeZone.locationName!),
     );
     String twoDigits(int number) => number.toString().padLeft(2, '0');
     return '${twoDigits(zonedValue.day)}.${twoDigits(zonedValue.month)}.'
