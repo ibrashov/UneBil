@@ -32,14 +32,31 @@ Run on an Android emulator with the local backend:
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
 ```
 
-For a physical Android device, replace `10.0.2.2` with your computer's LAN IP address.
+For a physical Android device on the same Wi-Fi as the computer, use the
+dedicated build script. It detects the computer LAN IP, verifies the backend,
+and embeds the correct address in the APK:
+
+```powershell
+.\scripts\Build-PhoneApk.ps1
+```
+
+The generated file is `UneBil-phone-release.apk`. A LAN address works only while
+the computer and backend are running and the phone is connected to the same
+Wi-Fi. It cannot be reached over 4G/5G. For access from any network, deploy the
+backend at a public HTTPS URL and pass that URL to the same script:
+
+```powershell
+.\scripts\Build-PhoneApk.ps1 -ApiBaseUrl https://your-backend.example.com
+```
+
+Detailed Russian instructions: [`PHONE_BACKEND_RU.md`](PHONE_BACKEND_RU.md).
 
 Run checks:
 
 ```sh
 dart analyze
 flutter test
-flutter build apk --debug
+flutter build apk --debug --dart-define=API_BASE_URL=http://10.0.2.2:3000
 ```
 
 The debug APK is created at:
