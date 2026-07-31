@@ -1,4 +1,6 @@
 import 'package:flutter/widgets.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:uuid/uuid.dart';
 
 import '../localization/app_strings.dart';
@@ -37,6 +39,7 @@ class AppController extends ChangeNotifier {
   final Map<String, Future<int>> _generationTasks = <String, Future<int>>{};
   final Map<String, String> _generationErrors = <String, String>{};
   String? _lastError;
+  static bool _timeZonesInitialized = false;
 
   static const _notificationIdStart =
       NotificationScheduler.topicNotificationIdStart;
@@ -103,10 +106,22 @@ class AppController extends ChangeNotifier {
           settings: _settings,
           topics: _topics,
           facts: _facts,
-          now: now ?? DateTime.now(),
+          now: now ?? _nowInNotificationTimeZone(),
         )
         .where((notification) => notification.topicId == topicId)
         .toList(growable: false);
+  }
+
+  DateTime _nowInNotificationTimeZone() {
+    final locationName = _settings.timeZone.locationName;
+    if (locationName == null) {
+      return DateTime.now();
+    }
+    if (!_timeZonesInitialized) {
+      tz_data.initializeTimeZones();
+      _timeZonesInitialized = true;
+    }
+    return tz.TZDateTime.now(tz.getLocation(locationName));
   }
 
   Future<void> addTopic(
