@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -114,6 +115,10 @@ class _UneBilAppState extends State<UneBilApp> {
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,
           themeMode: widget.controller.settings.themeMode.materialThemeMode,
+          builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+            value: AppTheme.systemUiOverlayStyle(Theme.of(context).brightness),
+            child: child ?? const SizedBox.shrink(),
+          ),
           home: interfaceLanguage == null
               ? LanguageSelectionScreen(controller: widget.controller)
               : HomeScreen(controller: widget.controller),
