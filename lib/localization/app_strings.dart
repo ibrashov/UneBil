@@ -15,6 +15,26 @@ class AppStrings {
   String get factLanguage =>
       _pick('Фактілер тілі', 'Fact language', 'Язык фактов');
   String get appearance => _pick('Сыртқы көрініс', 'Appearance', 'Оформление');
+  String get useDeviceSettings => _pick(
+    'Құрылғы параметрлерін пайдалану',
+    'Use device settings',
+    'Использовать настройки устройства',
+  );
+
+  String systemThemeDescription(bool isDark) {
+    return isDark
+        ? _pick(
+            'Құрылғы параметрлері: қазір қараңғы тақырып',
+            'Device settings: dark theme is active',
+            'Настройки устройства: сейчас активна тёмная тема',
+          )
+        : _pick(
+            'Құрылғы параметрлері: қазір жарық тақырып',
+            'Device settings: light theme is active',
+            'Настройки устройства: сейчас активна светлая тема',
+          );
+  }
+
   String themeModeLabel(AppThemeMode mode) {
     return switch (mode) {
       AppThemeMode.system => _pick('Жүйелік', 'System', 'Системная'),
