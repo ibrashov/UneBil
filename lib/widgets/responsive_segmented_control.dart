@@ -23,7 +23,7 @@ class ResponsiveSegmentedControl<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    const radius = BorderRadius.all(Radius.circular(10));
+    const radius = BorderRadius.all(Radius.circular(12));
 
     return Semantics(
       container: true,
@@ -96,7 +96,7 @@ class _SegmentItem<T> extends StatelessWidget {
       label: segment.label,
       excludeSemantics: true,
       child: Material(
-        color: selected ? colors.primaryContainer : Colors.transparent,
+        color: selected ? colors.primaryContainer : null,
         child: InkWell(
           onTap: () => onTap(segment.value),
           child: Padding(
