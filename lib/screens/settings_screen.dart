@@ -68,41 +68,67 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(height: 12),
               _SettingsCard(
                 title: strings.appearance,
-                child: ResponsiveSegmentedControl<AppThemeMode>(
-                  segments: AppThemeMode.values
-                      .map(
-                        (mode) => ResponsiveSegment<AppThemeMode>(
-                          value: mode,
-                          label: strings.themeModeLabel(mode),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ResponsiveSegmentedControl<AppThemeMode>(
+                      segments: AppThemeMode.values
+                          .map(
+                            (mode) => ResponsiveSegment<AppThemeMode>(
+                              value: mode,
+                              label: strings.themeModeLabel(mode),
+                            ),
+                          )
+                          .toList(),
+                      selected: settings.themeMode,
+                      onSelectionChanged: controller.updateThemeMode,
+                    ),
+                    if (settings.themeMode == AppThemeMode.system) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        strings.systemThemeDescription(
+                          MediaQuery.platformBrightnessOf(context) ==
+                              Brightness.dark,
                         ),
-                      )
-                      .toList(),
-                  selected: settings.themeMode,
-                  onSelectionChanged: controller.updateThemeMode,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
               _SettingsCard(
                 title: strings.timeZone,
-                child: DropdownButtonFormField<AppTimeZone>(
-                  initialValue: settings.timeZone,
-                  decoration: InputDecoration(
-                    labelText: strings.country,
-                    border: const OutlineInputBorder(),
-                  ),
-                  items: AppTimeZone.values
-                      .map(
-                        (timeZone) => DropdownMenuItem<AppTimeZone>(
-                          value: timeZone,
-                          child: Text(strings.timeZoneLabel(timeZone)),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (timeZone) {
-                    if (timeZone != null) {
-                      controller.updateTimeZone(timeZone);
-                    }
-                  },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<AppTimeZone>(
+                      initialValue: settings.timeZone,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: strings.country,
+                        border: const OutlineInputBorder(),
+                      ),
+                      items: AppTimeZone.values
+                          .map(
+                            (timeZone) => DropdownMenuItem<AppTimeZone>(
+                              value: timeZone,
+                              child: Text(strings.timeZoneLabel(timeZone)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (timeZone) {
+                        if (timeZone != null) {
+                          controller.updateTimeZone(timeZone);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      strings.quietHoursHint,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),
