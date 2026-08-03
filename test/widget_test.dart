@@ -54,6 +54,24 @@ void main() {
     expect(controller.topics.single.title, 'Космос');
   });
 
+  testWidgets('turns a topic off without deleting its facts', (tester) async {
+    final controller = await createController();
+    await controller.addTopic('История');
+    final factCount = controller.facts.length;
+
+    await tester.pumpWidget(UneBilApp(controller: controller));
+    await tester.tap(find.byType(Switch).first);
+    await tester.pumpAndSettle();
+
+    expect(controller.topics.single.enabled, isFalse);
+    expect(controller.facts, hasLength(factCount));
+    expect(find.textContaining('уведомления выключены'), findsOneWidget);
+
+    await tester.tap(find.byType(Switch).first);
+    await tester.pumpAndSettle();
+    expect(controller.topics.single.enabled, isTrue);
+  });
+
   testWidgets('keeps interface and fact languages independent', (tester) async {
     final controller = await createController();
 
