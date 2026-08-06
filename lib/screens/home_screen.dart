@@ -5,19 +5,30 @@ import '../models/interface_language.dart';
 import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
+import '../widgets/check_topic_card.dart';
+import '../widgets/facts_check_segmented_control.dart';
 import 'settings_screen.dart';
+import 'topic_check_screen.dart';
 import 'topic_detail_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.controller});
 
   final AppController controller;
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  HomeLearningMode _mode = HomeLearningMode.facts;
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
+        final controller = widget.controller;
         final strings = AppStrings(controller.settings.interfaceLanguage!);
         return Scaffold(
           appBar: AppBar(
@@ -38,12 +49,18 @@ class HomeScreen extends StatelessWidget {
           ),
           body: controller.loading
               ? const Center(child: CircularProgressIndicator())
-              : _HomeContent(controller: controller),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showTopicDialog(context, controller),
-            icon: const Icon(Icons.add),
-            label: Text(strings.topic),
-          ),
+              : _HomeContent(
+                  controller: controller,
+                  mode: _mode,
+                  onModeChanged: (mode) => setState(() => _mode = mode),
+                ),
+          floatingActionButton: _mode == HomeLearningMode.facts
+              ? FloatingActionButton.extended(
+                  onPressed: () => _showTopicDialog(context, controller),
+                  icon: const Icon(Icons.add),
+                  label: Text(strings.topic),
+                )
+              : null,
         );
       },
     );
@@ -51,13 +68,18 @@ class HomeScreen extends StatelessWidget {
 }
 
 class _HomeContent extends StatelessWidget {
-  const _HomeContent({required this.controller});
+  const _HomeContent({
+    required this.controller,
+    required this.mode,
+    required this.onModeChanged,
+  });
 
   final AppController controller;
+  final HomeLearningMode mode;
+  final ValueChanged<HomeLearningMode> onModeChanged;
 
   @override
   Widget build(BuildContext context) {
-    final topics = controller.topics;
     final settings = controller.settings;
     final strings = AppStrings(settings.interfaceLanguage!);
 
@@ -70,32 +92,101 @@ class _HomeContent extends StatelessWidget {
           title: strings.homeSlogan,
         ),
         const SizedBox(height: 16),
-        if (topics.isEmpty)
-          _EmptyTopics(
-            strings: strings,
-            onAdd: () => _showTopicDialog(context, controller),
-          )
-        else
-          ...topics.map(
+        if (controller.dataLoadFailed) ...[
+          Card(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.error_outline,
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      strings.dataLoadError,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        FactsCheckSegmentedControl(
+          selected: mode,
+          factsLabel: strings.factsTab,
+          checkLabel: strings.checkTab,
+          onChanged: onModeChanged,
+        ),
+        const SizedBox(height: 16),
+        AnimatedSwitcher(
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 220),
+          child: mode == HomeLearningMode.facts
+              ? _FactsTopicList(
+                  key: const ValueKey('factsMode'),
+                  controller: controller,
+                  strings: strings,
+                )
+              : _CheckTopicList(
+                  key: const ValueKey('checkMode'),
+                  controller: controller,
+                  strings: strings,
+                  onReturnToFacts: () => onModeChanged(HomeLearningMode.facts),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FactsTopicList extends StatelessWidget {
+  const _FactsTopicList({
+    super.key,
+    required this.controller,
+    required this.strings,
+  });
+
+  final AppController controller;
+  final AppStrings strings;
+
+  @override
+  Widget build(BuildContext context) {
+    final topics = controller.topics;
+    if (topics.isEmpty) {
+      return _EmptyTopics(
+        strings: strings,
+        onAdd: () => _showTopicDialog(context, controller),
+      );
+    }
+    return Column(
+      children: topics
+          .map(
             (topic) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: _TopicTile(
                 topic: topic,
                 factCount: controller.factsForTopic(topic.id).length,
+                unreadCount: controller.unreadCountForTopic(topic.id),
                 intervalLabel: topic.notificationInterval.label(
-                  settings.interfaceLanguage!,
+                  controller.settings.interfaceLanguage!,
                 ),
                 strings: strings,
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => TopicDetailScreen(
-                        controller: controller,
-                        topicId: topic.id,
-                      ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => TopicDetailScreen(
+                      controller: controller,
+                      topicId: topic.id,
                     ),
-                  );
-                },
+                  ),
+                ),
                 onToggle: (enabled) =>
                     controller.toggleTopic(topic.id, enabled),
                 onEdit: () =>
@@ -103,8 +194,89 @@ class _HomeContent extends StatelessWidget {
                 onDelete: () => controller.deleteTopic(topic.id),
               ),
             ),
+          )
+          .toList(growable: false),
+    );
+  }
+}
+
+class _CheckTopicList extends StatelessWidget {
+  const _CheckTopicList({
+    super.key,
+    required this.controller,
+    required this.strings,
+    required this.onReturnToFacts,
+  });
+
+  final AppController controller;
+  final AppStrings strings;
+  final VoidCallback onReturnToFacts;
+
+  @override
+  Widget build(BuildContext context) {
+    final topics = controller.topics
+        .where((topic) => controller.factsForTopic(topic.id).isNotEmpty)
+        .toList(growable: false);
+    if (topics.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
+          child: Column(
+            children: [
+              Icon(
+                Icons.psychology_alt_outlined,
+                size: 48,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                strings.noFactsAvailable,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              Text(strings.noCheckTopicsBody, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: onReturnToFacts,
+                child: Text(strings.returnToFacts),
+              ),
+            ],
           ),
-      ],
+        ),
+      );
+    }
+    return Column(
+      children: topics
+          .map((topic) {
+            final facts = controller.factsForTopic(topic.id);
+            final checked = controller.checkedCountForTopic(topic.id);
+            final unread = controller.unreadCountForTopic(topic.id);
+            final reviewStatus = checked == 0
+                ? strings.readyToReview
+                : checked < facts.length
+                ? strings.continueChecking
+                : strings.allFactsChecked;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: CheckTopicCard(
+                title: topic.title,
+                factStatus: strings.factsReadStatus(facts.length, unread),
+                reviewStatus: checked > 0
+                    ? '${strings.checkedStatus(checked)} · $reviewStatus'
+                    : reviewStatus,
+                progress: facts.isEmpty ? 0 : checked / facts.length,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => TopicCheckScreen(
+                      controller: controller,
+                      topicId: topic.id,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          })
+          .toList(growable: false),
     );
   }
 }
@@ -203,6 +375,7 @@ class _TopicTile extends StatelessWidget {
   const _TopicTile({
     required this.topic,
     required this.factCount,
+    required this.unreadCount,
     required this.intervalLabel,
     required this.strings,
     required this.onTap,
@@ -213,6 +386,7 @@ class _TopicTile extends StatelessWidget {
 
   final Topic topic;
   final int factCount;
+  final int unreadCount;
   final String intervalLabel;
   final AppStrings strings;
   final VoidCallback onTap;
@@ -228,9 +402,10 @@ class _TopicTile extends StatelessWidget {
         contentPadding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
         title: Text(topic.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(
-          topic.enabled
-              ? '${strings.factsCount(factCount)} · $intervalLabel'
-              : '${strings.factsCount(factCount)} · ${strings.notificationsOff}',
+          '${strings.factsReadStatus(factCount, unreadCount)} · '
+          '${topic.enabled ? intervalLabel : strings.notificationsOff}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
         ),
         leading: Switch(value: topic.enabled, onChanged: onToggle),
         trailing: PopupMenuButton<String>(
