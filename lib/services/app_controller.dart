@@ -16,6 +16,7 @@ import '../models/notification_time.dart';
 import '../models/topic.dart';
 import 'fact_generator.dart';
 import 'fact_deduplicator.dart';
+import 'fact_sort_service.dart';
 import 'notification_scheduler.dart';
 import 'storage_service.dart';
 
@@ -36,6 +37,7 @@ class AppController extends ChangeNotifier {
   List<LearningFact> _facts = <LearningFact>[];
   AppSettings _settings = AppSettings.defaultSettings;
   bool _loading = true;
+  bool _dataLoadFailed = false;
   final Map<String, Future<int>> _generationTasks = <String, Future<int>>{};
   final Map<String, String> _generationErrors = <String, String>{};
   String? _lastError;
@@ -55,6 +57,7 @@ class AppController extends ChangeNotifier {
   List<LearningFact> get facts => List.unmodifiable(_facts);
   AppSettings get settings => _settings;
   bool get loading => _loading;
+  bool get dataLoadFailed => _dataLoadFailed;
   String? get generatingTopicId => _generationTasks.keys.firstOrNull;
   String? get lastError => _lastError;
 
@@ -69,17 +72,20 @@ class AppController extends ChangeNotifier {
   Future<void> load() async {
     _loading = true;
     notifyListeners();
+    _storage.resetReadError();
     final normalizedTopics = _normalizeTopicNotificationIds(
       _storage.loadTopics(),
     );
     _topics = normalizedTopics.topics;
+    final needsReadStateMigration = _storage.factsNeedReadStateMigration;
     final cleanup = FactDeduplicator.cleanStoredFacts(_storage.loadFacts());
     _facts = cleanup.facts;
     _settings = _storage.loadSettings();
+    _dataLoadFailed = _storage.hadReadError;
     if (normalizedTopics.changed) {
       await _storage.saveTopics(_topics);
     }
-    if (cleanup.changed) {
+    if (cleanup.changed || needsReadStateMigration) {
       await _storage.saveFacts(_facts);
     }
     if (_settings.interfaceLanguage != null) {
@@ -91,9 +97,88 @@ class AppController extends ChangeNotifier {
   }
 
   List<LearningFact> factsForTopic(String topicId) {
-    return _facts
-        .where((fact) => fact.topicId == topicId)
-        .toList(growable: false);
+    return FactSortService.sortForReview(
+      _facts.where((fact) => fact.topicId == topicId),
+    );
+  }
+
+  int unreadCountForTopic(String topicId) =>
+      _facts.where((fact) => fact.topicId == topicId && !fact.isRead).length;
+
+  int checkedCountForTopic(String topicId) => _facts
+      .where((fact) => fact.topicId == topicId && fact.timesChecked > 0)
+      .length;
+
+  Future<void> markFactRead(String factId) {
+    return _updateFactReadState(factId, readAt: DateTime.now());
+  }
+
+  Future<void> markFactUnread(String factId) {
+    return _updateFactReadState(factId, clearReadAt: true);
+  }
+
+  Future<void> markAllFactsRead(String topicId) async {
+    final now = DateTime.now();
+    var changed = false;
+    _facts = _facts.map((fact) {
+      if (fact.topicId != topicId || fact.isRead) {
+        return fact;
+      }
+      changed = true;
+      return fact.copyWith(readAt: now);
+    }).toList();
+    if (changed) {
+      await _storage.saveFacts(_facts);
+      notifyListeners();
+    }
+  }
+
+  Future<void> saveFactReview({
+    required String factId,
+    required String recallText,
+    required ReviewResult result,
+  }) async {
+    final now = DateTime.now();
+    var changed = false;
+    _facts = _facts.map((fact) {
+      if (fact.id != factId) {
+        return fact;
+      }
+      changed = true;
+      return fact.copyWith(
+        readAt: fact.readAt ?? now,
+        lastCheckedAt: now,
+        lastRecallText: recallText.trim(),
+        reviewResult: result,
+        timesChecked: fact.timesChecked + 1,
+      );
+    }).toList();
+    if (changed) {
+      await _storage.saveFacts(_facts);
+      notifyListeners();
+    }
+  }
+
+  Future<void> _updateFactReadState(
+    String factId, {
+    DateTime? readAt,
+    bool clearReadAt = false,
+  }) async {
+    var changed = false;
+    _facts = _facts.map((fact) {
+      if (fact.id != factId || (fact.isRead && !clearReadAt)) {
+        return fact;
+      }
+      if (!fact.isRead && clearReadAt) {
+        return fact;
+      }
+      changed = true;
+      return fact.copyWith(readAt: readAt, clearReadAt: clearReadAt);
+    }).toList();
+    if (changed) {
+      await _storage.saveFacts(_facts);
+      notifyListeners();
+    }
   }
 
   /// Returns the same upcoming queue that is sent to Android notifications.
@@ -205,17 +290,7 @@ class AppController extends ChangeNotifier {
     _facts = _facts
         .map(
           (fact) => fact.topicId == topicId
-              ? LearningFact(
-                  id: fact.id,
-                  topicId: fact.topicId,
-                  topicTitle: trimmed,
-                  title: fact.title,
-                  body: fact.body,
-                  language: fact.language,
-                  length: fact.length,
-                  createdAt: fact.createdAt,
-                  key: fact.key,
-                )
+              ? fact.copyWith(topicTitle: trimmed)
               : fact,
         )
         .toList();
