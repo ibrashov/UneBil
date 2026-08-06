@@ -7,6 +7,7 @@ import 'package:unebil/models/interface_language.dart';
 import 'package:unebil/models/notification_interval.dart';
 import 'package:unebil/models/notification_length.dart';
 import 'package:unebil/screens/settings_screen.dart';
+import 'package:unebil/widgets/facts_check_segmented_control.dart';
 import 'package:unebil/widgets/responsive_segmented_control.dart';
 
 import 'app_controller_test.dart';
@@ -38,6 +39,109 @@ void main() {
 
     expect(find.text('Добавь первую тему'), findsOneWidget);
     expect(find.text('Добавить тему'), findsOneWidget);
+    final control = tester.widget<FactsCheckSegmentedControl>(
+      find.byType(FactsCheckSegmentedControl),
+    );
+    expect(control.selected, HomeLearningMode.facts);
+  });
+
+  testWidgets('switches from Facts to the localized empty Check state', (
+    tester,
+  ) async {
+    final controller = await createController();
+    await tester.pumpWidget(UneBilApp(controller: controller));
+
+    await tester.tap(find.text('Проверка'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Нет фактов для проверки'), findsOneWidget);
+    expect(find.text('Перейти к фактам'), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
+  });
+
+  testWidgets('completes recall, reveal, and self-assessment flow', (
+    tester,
+  ) async {
+    final controller = await createController();
+    await controller.addTopic('Космос');
+    final fact = controller.facts.single;
+    await tester.pumpWidget(UneBilApp(controller: controller));
+
+    await tester.tap(find.text('Проверка'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Космос'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Напиши всё, что помнишь об этом факте.'), findsOneWidget);
+    expect(find.text(fact.body), findsNothing);
+    await tester.enterText(
+      find.byKey(const ValueKey('recallTextField')),
+      'Мой ответ',
+    );
+    await tester.tap(find.byKey(const ValueKey('showFactButton')));
+    await tester.pumpAndSettle();
+
+    expect(find.text(fact.body), findsOneWidget);
+    expect(find.text('Мой ответ'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('rememberedButton')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Проверка завершена'), findsOneWidget);
+    expect(controller.facts.single.timesChecked, 1);
+    expect(controller.facts.single.lastRecallText, 'Мой ответ');
+    expect(controller.facts.single.isRead, isTrue);
+  });
+
+  testWidgets('fact menu toggles read state and mark all clears unread', (
+    tester,
+  ) async {
+    final controller = await createController();
+    await controller.addTopic('Космос');
+    await tester.pumpWidget(UneBilApp(controller: controller));
+    await tester.tap(find.text('Космос'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Отметить всё прочитанным'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Отметить прочитанным'));
+    await tester.pumpAndSettle();
+    expect(controller.facts.single.isRead, isTrue);
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Отметить непрочитанным'));
+    await tester.pumpAndSettle();
+    expect(controller.facts.single.isRead, isFalse);
+
+    await tester.tap(find.text('Отметить всё прочитанным'));
+    await tester.pumpAndSettle();
+    expect(controller.unreadCountForTopic(controller.topics.single.id), 0);
+  });
+
+  testWidgets('Facts and Check render in light and dark themes', (
+    tester,
+  ) async {
+    final controller = await createController();
+    await controller.addTopic('Космос');
+    await controller.updateThemeMode(AppThemeMode.light);
+    await tester.pumpWidget(UneBilApp(controller: controller));
+    expect(
+      Theme.of(
+        tester.element(find.byType(FactsCheckSegmentedControl)),
+      ).brightness,
+      Brightness.light,
+    );
+
+    await controller.updateThemeMode(AppThemeMode.dark);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Проверка'));
+    await tester.pumpAndSettle();
+    expect(
+      Theme.of(tester.element(find.text('Готово к проверке'))).brightness,
+      Brightness.dark,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('adds a topic from the home screen', (tester) async {
