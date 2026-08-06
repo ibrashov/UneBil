@@ -4,9 +4,12 @@ import 'package:timezone/timezone.dart' as tz;
 
 import '../localization/app_strings.dart';
 import '../models/app_time_zone.dart';
+import '../models/learning_fact.dart';
 import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
+import '../widgets/unread_indicator.dart';
+import 'fact_detail_screen.dart';
 
 class TopicDetailScreen extends StatelessWidget {
   const TopicDetailScreen({
@@ -45,6 +48,7 @@ class TopicDetailScreen extends StatelessWidget {
         }
         final generating = controller.isGeneratingTopic(topic.id);
         final generationError = controller.generationErrorForTopic(topic.id);
+        final unreadCount = controller.unreadCountForTopic(topic.id);
 
         return Scaffold(
           appBar: AppBar(title: Text(topic.title)),
@@ -88,6 +92,17 @@ class TopicDetailScreen extends StatelessWidget {
                     ..showSnackBar(SnackBar(content: Text(localizedMessage)));
                 },
               ),
+              if (unreadCount > 0) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () => controller.markAllFactsRead(topic.id),
+                    icon: const Icon(Icons.done_all),
+                    label: Text(strings.markAllAsRead),
+                  ),
+                ),
+              ],
               if (generationError != null) ...[
                 const SizedBox(height: 12),
                 _ErrorBanner(
@@ -101,33 +116,23 @@ class TopicDetailScreen extends StatelessWidget {
                 ...facts.map(
                   (fact) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fact.title,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(fact.body),
-                            const SizedBox(height: 12),
-                            Text(
-                              '${fact.language.label} · ${strings.lengthLabel(fact.length)}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 8),
-                            _NotificationSchedule(
-                              enabled: topic.enabled,
-                              scheduledAt: nextNotificationByFact[fact.id],
-                              timeZone: controller.settings.timeZone,
-                              strings: strings,
-                            ),
-                          ],
+                    child: _FactCard(
+                      fact: fact,
+                      strings: strings,
+                      notificationEnabled: topic.enabled,
+                      scheduledAt: nextNotificationByFact[fact.id],
+                      timeZone: controller.settings.timeZone,
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => FactDetailScreen(
+                            controller: controller,
+                            factId: fact.id,
+                          ),
                         ),
                       ),
+                      onReadToggle: () => fact.isRead
+                          ? controller.markFactUnread(fact.id)
+                          : controller.markFactRead(fact.id),
                     ),
                   ),
                 ),
@@ -135,6 +140,105 @@ class TopicDetailScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _FactCard extends StatelessWidget {
+  const _FactCard({
+    required this.fact,
+    required this.strings,
+    required this.notificationEnabled,
+    required this.scheduledAt,
+    required this.timeZone,
+    required this.onTap,
+    required this.onReadToggle,
+  });
+
+  final LearningFact fact;
+  final AppStrings strings;
+  final bool notificationEnabled;
+  final DateTime? scheduledAt;
+  final AppTimeZone timeZone;
+  final VoidCallback onTap;
+  final VoidCallback onReadToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 7),
+                child: fact.isRead
+                    ? const SizedBox(width: 9)
+                    : UnreadIndicator(semanticLabel: strings.unreadCount(1)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      fact.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: fact.isRead
+                            ? FontWeight.w600
+                            : FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      fact.body,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: fact.isRead
+                            ? FontWeight.normal
+                            : FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '${fact.language.label} · ${strings.lengthLabel(fact.length)}',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                    _NotificationSchedule(
+                      enabled: notificationEnabled,
+                      scheduledAt: scheduledAt,
+                      timeZone: timeZone,
+                      strings: strings,
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert),
+                onSelected: (_) => onReadToggle(),
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: 'read-state',
+                    child: Text(
+                      fact.isRead ? strings.markAsUnread : strings.markAsRead,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
