@@ -126,6 +126,104 @@ class AppStrings {
   String get addTopic => _pick('Тақырып қосу', 'Add topic', 'Добавить тему');
   String factsCount(int count) =>
       _pick('$count факт', '$count facts', '$count фактов');
+  String get factsTab => _pick('Фактілер', 'Facts', 'Факты');
+  String get checkTab => _pick('Тексеру', 'Check', 'Проверка');
+  String get markAsRead =>
+      _pick('Оқылған деп белгілеу', 'Mark as read', 'Отметить прочитанным');
+  String get markAsUnread => _pick(
+    'Оқылмаған деп белгілеу',
+    'Mark as unread',
+    'Отметить непрочитанным',
+  );
+  String get markAllAsRead => _pick(
+    'Барлығын оқылған деп белгілеу',
+    'Mark all as read',
+    'Отметить всё прочитанным',
+  );
+  String unreadCount(int count) =>
+      _pick('$count оқылмаған', '$count unread', '$count непрочитано');
+  String get allRead => _pick('бәрі оқылды', 'all read', 'всё прочитано');
+  String factsReadStatus(int facts, int unread) => unread > 0
+      ? '${factsCount(facts)} · ${unreadCount(unread)}'
+      : '${factsCount(facts)} · $allRead';
+  String get readyToReview =>
+      _pick('Тексеруге дайын', 'Ready to review', 'Готово к проверке');
+  String get continueChecking =>
+      _pick('Тексеруді жалғастыру', 'Continue checking', 'Продолжить проверку');
+  String checkedStatus(int count) => _pick(
+    '$count факт тексерілді',
+    '$count facts checked',
+    '$count фактов проверено',
+  );
+  String get allFactsChecked => _pick(
+    'Барлық фактілер тексерілді',
+    'All facts checked',
+    'Все факты проверены',
+  );
+  String get noFactsAvailable => _pick(
+    'Тексеруге фактілер жоқ',
+    'No facts available',
+    'Нет фактов для проверки',
+  );
+  String get noCheckTopicsBody => _pick(
+    'Алдымен «Фактілер» бөлімінде факт жасаңыз.',
+    'Generate a fact in Facts mode first.',
+    'Сначала создай факт в разделе «Факты».',
+  );
+  String get returnToFacts =>
+      _pick('Фактілерге өту', 'Go to Facts', 'Перейти к фактам');
+  String factPosition(int current, int total) => _pick(
+    '$total ішінен $current',
+    '$current of $total',
+    '$current из $total',
+  );
+  String get recallInstruction => _pick(
+    'Бұл факт туралы есіңізде қалғанның бәрін жазыңыз.',
+    'Write everything you remember about this fact.',
+    'Напиши всё, что помнишь об этом факте.',
+  );
+  String get recallHint => _pick(
+    'Ойыңызды осы жерге жазыңыз…',
+    'Write what you remember…',
+    'Напиши, что помнишь…',
+  );
+  String get whatYouRemembered =>
+      _pick('Сіз не есте сақтадыңыз', 'What you remembered', 'Что ты вспомнил');
+  String get originalFact =>
+      _pick('Бастапқы факт', 'Original fact', 'Исходный факт');
+  String get showFact => _pick('Фактіні көрсету', 'Show fact', 'Показать факт');
+  String get checkAnswer =>
+      _pick('Жауапты тексеру', 'Check answer', 'Проверить ответ');
+  String get rememberedIt =>
+      _pick('Есімде қалды', 'I remembered it', 'Я это запомнил');
+  String get reviewAgain =>
+      _pick('Қайта қарау', 'Review again', 'Повторить ещё раз');
+  String get reviewComplete =>
+      _pick('Тексеру аяқталды', 'Review complete', 'Проверка завершена');
+  String checkedFacts(int count) => _pick(
+    'Тексерілген фактілер: $count',
+    'Checked facts: $count',
+    'Проверено фактов: $count',
+  );
+  String rememberedFacts(int count) =>
+      _pick('Есте сақталды: $count', 'Remembered: $count', 'Запомнено: $count');
+  String difficultFacts(int count) => _pick(
+    'Қиын фактілер: $count',
+    'Difficult facts: $count',
+    'Сложных фактов: $count',
+  );
+  String get reviewDifficultAgain => _pick(
+    'Қиын фактілерді қайталау',
+    'Review difficult facts again',
+    'Повторить сложные факты',
+  );
+  String get returnToTopics =>
+      _pick('Тақырыптарға оралу', 'Return to topics', 'Вернуться к темам');
+  String get dataLoadError => _pick(
+    'Сақталған деректердің бір бөлігін оқу мүмкін болмады.',
+    'Some saved data could not be read.',
+    'Не удалось прочитать часть сохранённых данных.',
+  );
   String get notificationsOff => _pick(
     'хабарландырулар өшірулі',
     'notifications are off',
