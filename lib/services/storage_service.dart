@@ -14,6 +14,11 @@ class StorageService {
   static const _settingsKey = 'unebil.settings';
 
   final SharedPreferences _prefs;
+  bool _hadReadError = false;
+
+  bool get hadReadError => _hadReadError;
+
+  void resetReadError() => _hadReadError = false;
 
   List<Topic> loadTopics() {
     final raw = _prefs.getString(_topicsKey);
@@ -32,6 +37,7 @@ class StorageService {
           .toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     } catch (_) {
+      _hadReadError = true;
       return <Topic>[];
     }
   }
@@ -60,7 +66,22 @@ class StorageService {
           .toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     } catch (_) {
+      _hadReadError = true;
       return <LearningFact>[];
+    }
+  }
+
+  bool get factsNeedReadStateMigration {
+    final raw = _prefs.getString(_factsKey);
+    if (raw == null) {
+      return false;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is List &&
+          decoded.whereType<Map>().any((item) => !item.containsKey('readAt'));
+    } catch (_) {
+      return false;
     }
   }
 
@@ -84,6 +105,7 @@ class StorageService {
       }
       return AppSettings.fromJson(decoded);
     } catch (_) {
+      _hadReadError = true;
       return AppSettings.defaultSettings;
     }
   }
