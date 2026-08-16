@@ -91,7 +91,10 @@ class _UneBilAppState extends State<UneBilApp> {
       return;
     }
     navigator.push(
-      MaterialPageRoute<void>(builder: (_) => FactDetailScreen(fact: fact)),
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            FactDetailScreen(controller: widget.controller, factId: fact.id),
+      ),
     );
   }
 
