@@ -2,4 +2,5 @@
 <resources>
     <color name="unebil_background">#F6F7F5</color>
     <color name="unebil_primary">#0E3D3B</color>
+	<color name="ic_launcher_background">#F6F7F5</color>
 </resources>
