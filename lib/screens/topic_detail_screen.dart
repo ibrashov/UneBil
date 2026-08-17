@@ -8,6 +8,7 @@ import '../models/learning_fact.dart';
 import '../models/notification_interval.dart';
 import '../models/topic.dart';
 import '../services/app_controller.dart';
+import '../services/fact_generator.dart';
 import '../widgets/unread_indicator.dart';
 import 'fact_detail_screen.dart';
 
@@ -76,6 +77,7 @@ class TopicDetailScreen extends StatelessWidget {
                 onGenerate: () async {
                   final addedCount = await controller.generateFactsForTopic(
                     topic.id,
+                    count: factGenerationBatchSize,
                   );
                   if (!context.mounted) {
                     return;
@@ -85,7 +87,7 @@ class TopicDetailScreen extends StatelessWidget {
                   final localizedMessage = error != null
                       ? strings.localizeGenerationError(error)
                       : addedCount > 0
-                      ? strings.factAdded
+                      ? strings.factsAdded(addedCount)
                       : strings.emptyBackendResponse;
                   ScaffoldMessenger.of(context)
                     ..hideCurrentSnackBar()
