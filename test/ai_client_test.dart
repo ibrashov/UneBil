@@ -139,121 +139,141 @@ void main() {
     );
   });
 
+  test('requests and returns one complete 15-fact backend batch', () async {
+    var httpCalls = 0;
+    int? requestedCount;
+    final client = MockClient((request) async {
+      httpCalls += 1;
+      requestedCount =
+          (jsonDecode(request.body) as Map<String, dynamic>)['count'] as int;
+      return http.Response(
+        jsonEncode(<String, Object>{
+          'source': 'cerebras',
+          'facts': _backendBatch(factGenerationBatchSize),
+        }),
+        200,
+      );
+    });
+    final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
+
+    final generated = await aiClient.generateFacts(
+      topic: 'Space',
+      language: AppLanguage.en,
+      length: NotificationLength.short,
+      count: factGenerationBatchSize,
+    );
+
+    expect(requestedCount, factGenerationBatchSize);
+    expect(httpCalls, 1);
+    expect(generated, hasLength(factGenerationBatchSize));
+  });
+
   test(
-    'serves six rapid one-card generations from one prefetched batch',
+    'accepts a partial backend batch without making a refill call',
     () async {
       var httpCalls = 0;
-      int? requestedCount;
-      final client = MockClient((request) async {
+      final client = MockClient((_) async {
         httpCalls += 1;
-        requestedCount =
-            (jsonDecode(request.body) as Map<String, dynamic>)['count'] as int;
         return http.Response(
           jsonEncode(<String, Object>{
             'source': 'cerebras',
-            'facts': const <Map<String, String>>[
-              <String, String>{
-                'key': 'axolotl|regeneration',
-                'title': 'Axolotl Regeneration',
-                'body': 'Axolotls can regrow limbs and spinal cord tissue.',
-              },
-              <String, String>{
-                'key': 'wombat|cube droppings',
-                'title': 'Wombat Cubes',
-                'body': 'Wombat intestines shape droppings into cubes.',
-              },
-              <String, String>{
-                'key': 'crow|tool use',
-                'title': 'Crow Tools',
-                'body': 'New Caledonian crows shape twigs into tools.',
-              },
-              <String, String>{
-                'key': 'mantis shrimp|vision',
-                'title': 'Mantis Shrimp Vision',
-                'body':
-                    'Mantis shrimp have unusually many color receptor types.',
-              },
-              <String, String>{
-                'key': 'platypus|electroreception',
-                'title': 'Platypus Hunting',
-                'body':
-                    'Platypuses detect electrical signals made by moving prey.',
-              },
-              <String, String>{
-                'key': 'sea otter|stone tools',
-                'title': 'Sea Otter Tools',
-                'body': 'Sea otters use stones to crack hard-shelled prey.',
-              },
-            ],
+            'facts': _backendBatch(14),
           }),
           200,
         );
       });
       final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
 
-      final generated = <GeneratedFact>[];
-      for (var index = 0; index < 6; index += 1) {
-        final next = await aiClient.generateFacts(
-          topic: 'Animals',
-          language: AppLanguage.en,
-          length: NotificationLength.short,
-          excludedFacts: generated,
-        );
-        generated.addAll(next);
-      }
+      final partial = await aiClient.generateFacts(
+        topic: 'Flutter & Dart',
+        language: AppLanguage.en,
+        length: NotificationLength.short,
+        count: factGenerationBatchSize,
+      );
 
-      expect(requestedCount, 6);
       expect(httpCalls, 1);
-      expect(<String>{...generated.map((fact) => fact.key)}, hasLength(6));
+      expect(partial, hasLength(14));
     },
   );
+}
 
-  test('returns a partial cache when its refill is rate-limited', () async {
-    var httpCalls = 0;
-    final client = MockClient((_) async {
-      httpCalls += 1;
-      if (httpCalls == 1) {
-        return http.Response(
-          jsonEncode(<String, Object>{
-            'source': 'cerebras',
-            'facts': const <Map<String, String>>[
-              <String, String>{
-                'key': 'axolotl|limb regeneration',
-                'title': 'Axolotl Regeneration',
-                'body': 'Axolotls can regrow limbs and spinal cord tissue.',
-              },
-              <String, String>{
-                'key': 'wombat|cube droppings',
-                'title': 'Wombat Cubes',
-                'body': 'Wombat intestines shape droppings into cubes.',
-              },
-            ],
-          }),
-          200,
-        );
-      }
-      return http.Response(
-        jsonEncode(<String, String>{'error': 'rate limit'}),
-        429,
-      );
-    });
-    final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
-
-    final first = await aiClient.generateFacts(
-      topic: 'Animals',
-      language: AppLanguage.en,
-      length: NotificationLength.short,
-    );
-    final partial = await aiClient.generateFacts(
-      topic: 'Animals',
-      language: AppLanguage.en,
-      length: NotificationLength.short,
-      count: 2,
-      excludedFacts: first,
-    );
-
-    expect(httpCalls, 2);
-    expect(partial, hasLength(1));
-    expect(partial.single.key, 'wombat|cube droppings');
-  });
+List<Map<String, String>> _backendBatch(int count) {
+  const facts = <Map<String, String>>[
+    <String, String>{
+      'key': 'mercury|year',
+      'title': 'Mercury Year',
+      'body': 'Mercury completes an orbit in only 88 Earth days.',
+    },
+    <String, String>{
+      'key': 'venus|rotation',
+      'title': 'Venus Rotation',
+      'body': 'Venus rotates slower than it travels around the Sun.',
+    },
+    <String, String>{
+      'key': 'earth|tectonics',
+      'title': 'Moving Plates',
+      'body': 'Earth recycles crust through plate tectonics and subduction.',
+    },
+    <String, String>{
+      'key': 'mars|volcano',
+      'title': 'Olympus Mons',
+      'body': 'Mars hosts the tallest known volcano in the Solar System.',
+    },
+    <String, String>{
+      'key': 'jupiter|magnetism',
+      'title': 'Jupiter Magnetism',
+      'body': 'Jupiter has an exceptionally powerful planetary magnetic field.',
+    },
+    <String, String>{
+      'key': 'saturn|density',
+      'title': 'Saturn Density',
+      'body': 'Saturn has a lower average density than liquid water.',
+    },
+    <String, String>{
+      'key': 'uranus|tilt',
+      'title': 'Sideways Uranus',
+      'body': 'Uranus spins with an axial tilt of about 98 degrees.',
+    },
+    <String, String>{
+      'key': 'neptune|winds',
+      'title': 'Neptune Winds',
+      'body': 'Neptune winds can exceed two thousand kilometers per hour.',
+    },
+    <String, String>{
+      'key': 'moon|recession',
+      'title': 'Receding Moon',
+      'body': 'The Moon moves several centimeters away from Earth yearly.',
+    },
+    <String, String>{
+      'key': 'sun|mass',
+      'title': 'Solar Mass',
+      'body': 'The Sun holds nearly all mass in our planetary system.',
+    },
+    <String, String>{
+      'key': 'black hole|time',
+      'title': 'Gravity and Time',
+      'body': 'Extreme gravity makes nearby clocks appear to run slower.',
+    },
+    <String, String>{
+      'key': 'pulsar|rotation',
+      'title': 'Pulsar Clocks',
+      'body': 'Some pulsars spin hundreds of times during one second.',
+    },
+    <String, String>{
+      'key': 'comet|tail',
+      'title': 'Comet Tails',
+      'body': 'Solar radiation pushes a comet tail away from the Sun.',
+    },
+    <String, String>{
+      'key': 'nebula|stars',
+      'title': 'Stellar Nurseries',
+      'body': 'Dense nebula regions can collapse and create new stars.',
+    },
+    <String, String>{
+      'key': 'exoplanet|transit',
+      'title': 'Transit Detection',
+      'body': 'Tiny periodic starlight dips can reveal orbiting exoplanets.',
+    },
+  ];
+  return facts.take(count).toList(growable: false);
 }
