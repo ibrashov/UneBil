@@ -262,10 +262,10 @@ class AppStrings {
       _pick('Жасалуда...', 'Generating...', 'Генерируем...');
   String get generateFact =>
       _pick('Факт жасау', 'Generate fact', 'Сгенерировать факт');
-  String get factAdded => _pick(
-    'Дайын: факт қосылды.',
-    'Done: fact added.',
-    'Готово: факт добавлен.',
+  String factsAdded(int count) => _pick(
+    'Дайын: $count факт қосылды.',
+    'Done: $count facts added.',
+    'Готово: добавлено фактов: $count.',
   );
   String get emptyBackendResponse => _pick(
     'Backend бос жауап қайтарды.',
