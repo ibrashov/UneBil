@@ -475,6 +475,30 @@ void main() {
   });
 
   test(
+    'stores every returned batch item as a separate learning fact',
+    () async {
+      final batch = _distinctGeneratedBatch();
+      final fakeGenerator = FakeFactGenerator(
+        responses: <List<GeneratedFact>>[const <GeneratedFact>[], batch],
+      );
+      final controller = await createController(fakeGenerator: fakeGenerator);
+      await controller.addTopic('Space');
+      final topicId = controller.topics.single.id;
+
+      final addedCount = await controller.generateFactsForTopic(
+        topicId,
+        count: factGenerationBatchSize,
+      );
+
+      expect(addedCount, factGenerationBatchSize);
+      final stored = controller.factsForTopic(topicId);
+      expect(stored, hasLength(factGenerationBatchSize));
+      expect(stored.map((fact) => fact.id).toSet(), hasLength(15));
+      expect(stored.map((fact) => fact.title).toSet(), hasLength(15));
+    },
+  );
+
+  test(
     'coalesces automatic and manual generation for the same topic',
     () async {
       final generator = BlockingFactGenerator();
@@ -941,6 +965,84 @@ LearningFact learningFact({
     key: key,
   );
 }
+
+List<GeneratedFact> _distinctGeneratedBatch() => const <GeneratedFact>[
+  GeneratedFact(
+    key: 'mercury|year',
+    title: 'Mercury Year',
+    body: 'Mercury completes an orbit in only 88 Earth days.',
+  ),
+  GeneratedFact(
+    key: 'venus|rotation',
+    title: 'Venus Rotation',
+    body: 'Venus rotates slower than it travels around the Sun.',
+  ),
+  GeneratedFact(
+    key: 'earth|tectonics',
+    title: 'Moving Plates',
+    body: 'Earth recycles crust through plate tectonics and subduction.',
+  ),
+  GeneratedFact(
+    key: 'mars|volcano',
+    title: 'Olympus Mons',
+    body: 'Mars hosts the tallest known volcano in the Solar System.',
+  ),
+  GeneratedFact(
+    key: 'jupiter|magnetism',
+    title: 'Jupiter Magnetism',
+    body: 'Jupiter has an exceptionally powerful planetary magnetic field.',
+  ),
+  GeneratedFact(
+    key: 'saturn|density',
+    title: 'Saturn Density',
+    body: 'Saturn has a lower average density than liquid water.',
+  ),
+  GeneratedFact(
+    key: 'uranus|tilt',
+    title: 'Sideways Uranus',
+    body: 'Uranus spins with an axial tilt of about 98 degrees.',
+  ),
+  GeneratedFact(
+    key: 'neptune|winds',
+    title: 'Neptune Winds',
+    body: 'Neptune winds can exceed two thousand kilometers per hour.',
+  ),
+  GeneratedFact(
+    key: 'moon|recession',
+    title: 'Receding Moon',
+    body: 'The Moon moves several centimeters away from Earth yearly.',
+  ),
+  GeneratedFact(
+    key: 'sun|mass',
+    title: 'Solar Mass',
+    body: 'The Sun holds nearly all mass in our planetary system.',
+  ),
+  GeneratedFact(
+    key: 'black hole|time',
+    title: 'Gravity and Time',
+    body: 'Extreme gravity makes nearby clocks appear to run slower.',
+  ),
+  GeneratedFact(
+    key: 'pulsar|rotation',
+    title: 'Pulsar Clocks',
+    body: 'Some pulsars spin hundreds of times during one second.',
+  ),
+  GeneratedFact(
+    key: 'comet|tail',
+    title: 'Comet Tails',
+    body: 'Solar radiation pushes a comet tail away from the Sun.',
+  ),
+  GeneratedFact(
+    key: 'nebula|stars',
+    title: 'Stellar Nurseries',
+    body: 'Dense nebula regions can collapse and create new stars.',
+  ),
+  GeneratedFact(
+    key: 'exoplanet|transit',
+    title: 'Transit Detection',
+    body: 'Tiny periodic starlight dips can reveal orbiting exoplanets.',
+  ),
+];
 
 class RecordingScheduler implements FactNotificationScheduler {
   int initializeCalls = 0;
