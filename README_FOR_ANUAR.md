@@ -50,11 +50,16 @@ cd backend
 npm start
 ```
 
-Запустить приложение на Android emulator:
+Запустить приложение на Android emulator (рекомендуемый способ для пути с кириллицей):
 
-```sh
-flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
+```powershell
+.\scripts\Start-AndroidEmulator.ps1
 ```
+
+Скрипт временно подключает папку проекта и Pub-кэш как диски с ASCII-путями.
+Это обходит ошибку `aapt: Illegal byte sequence`; исходники при этом никуда не
+перемещаются. Обычный `flutter run` из полного пути `C:\Users\Ануар\...` для
+Android не используй, пока Android build-tools не исправит обработку Unicode.
 
 Проверить Flutter-код:
 
