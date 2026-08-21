@@ -90,10 +90,29 @@ function Get-FreeDriveLetter {
     throw "No free temporary drive letter is available for the Android build."
 }
 
-$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$gitRoot = (& git -C $projectRoot rev-parse --show-toplevel 2>$null)
-if ($LASTEXITCODE -eq 0 -and $gitRoot) {
-    $projectRoot = [IO.Path]::GetFullPath(($gitRoot | Select-Object -First 1))
+function Get-AsciiDirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ($Path -notmatch '[^\x00-\x7F]') {
+        return $Path
+    }
+    $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+    try {
+        $shortPath = $fileSystem.GetFolder($Path).ShortPath
+    } finally {
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($fileSystem)
+    }
+    if ($shortPath -match '[^\x00-\x7F]') {
+        throw "Windows did not provide an ASCII short path for '$Path'."
+    }
+    return $shortPath
+}
+
+$workingDirectory = (Get-Location).Path
+$projectRoot = if (Test-Path -LiteralPath (Join-Path $workingDirectory "pubspec.yaml")) {
+    $workingDirectory
+} else {
+    (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 if ([string]::IsNullOrWhiteSpace($ApiBaseUrl)) {
     $lanAddress = Get-LanIPv4Address
@@ -152,7 +171,8 @@ try {
     if ($projectRoot -match '[^\x00-\x7F]') {
         $projectDriveLetter = Get-FreeDriveLetter
         $projectDrive = "${projectDriveLetter}:"
-        & subst.exe $projectDrive $projectRoot
+        $projectSubstTarget = Get-AsciiDirectoryPath $projectRoot
+        & subst.exe $projectDrive $projectSubstTarget
         if ($LASTEXITCODE -ne 0) {
             throw "Could not map temporary build drive $projectDrive."
         }
@@ -166,7 +186,8 @@ try {
             ForEach-Object { $_.Substring(0, 1) }
         $cacheDriveLetter = Get-FreeDriveLetter -Excluded $excludedLetters
         $cacheDrive = "${cacheDriveLetter}:"
-        & subst.exe $cacheDrive $pubCacheTarget
+        $cacheSubstTarget = Get-AsciiDirectoryPath $pubCacheTarget
+        & subst.exe $cacheDrive $cacheSubstTarget
         if ($LASTEXITCODE -ne 0) {
             throw "Could not map temporary Pub cache drive $cacheDrive."
         }
