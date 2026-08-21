@@ -3,8 +3,11 @@ import { after, before, test } from 'node:test';
 
 import app, {
   AiProviderHttpError,
+  FACT_GENERATION_BATCH_SIZE,
+  describeAiProviderFailure,
   generateFactsWithAi,
   makeMockFacts,
+  parseAiJsonObject,
   validateGenerateFactsRequest,
 } from '../src/app.js';
 import { areFactsSimilar } from '../src/fact-deduplicator.js';
@@ -117,6 +120,36 @@ test('valid request accepts excluded facts', () => {
   ]);
 });
 
+test('generation defaults to the experimental 10-fact batch size', () => {
+  const result = validateGenerateFactsRequest({
+    topic: 'Flutter & Dart',
+    language: 'en',
+    lengthMode: 'medium',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.value.count, FACT_GENERATION_BATCH_SIZE);
+});
+
+test('special topic names remain valid request values', () => {
+  for (const topic of [
+    'Flutter & Dart',
+    'История Казахстана',
+    'Қазақ хандығы',
+    'C++',
+    'AI / Machine Learning',
+  ]) {
+    const result = validateGenerateFactsRequest({
+      topic,
+      language: 'kk',
+      lengthMode: 'detailed',
+      count: FACT_GENERATION_BATCH_SIZE,
+    });
+    assert.equal(result.ok, true, topic);
+    assert.equal(result.value.topic, topic);
+  }
+});
+
 test('invalid excluded facts are rejected', () => {
   const result = validateGenerateFactsRequest({
     topic: 'animals',
@@ -195,117 +228,144 @@ test('different facts about one animal are not duplicates', () => {
   );
 });
 
-test('generation retries when the provider only returns an old claim', async () => {
-  const excluded = {
-    key: 'octopus|three hearts',
-    title: 'Octopus Hearts',
-    body:
-      'Octopuses have three hearts: two pump blood to the gills and one supplies the body.',
-  };
-  const duplicate = {
-    key: 'octopus|three cardiac organs',
-    title: 'A Trio of Cardiac Organs',
-    body:
-      'An octopus uses a trio of cardiac organs; a pair serves the gills and one serves the body.',
-  };
-  const fresh = {
-    key: 'wombat|cube droppings',
-    title: 'Wombat Cubes',
-    body:
-      'Wombats produce cube-shaped droppings because different parts of their intestines stretch at different rates.',
-  };
-  const fakeProvider = scriptedProvider([[duplicate], [fresh]]);
+test('one provider request returns and measures a 10-fact batch', async () => {
+  const rawFacts = distinctRawFacts.slice(0, FACT_GENERATION_BATCH_SIZE);
+  const fakeProvider = scriptedProvider([
+    {
+      facts: rawFacts,
+      usage: {
+        prompt_tokens: 321,
+        completion_tokens: 654,
+        total_tokens: 975,
+      },
+    },
+  ]);
 
-  const facts = await generateFactsWithAi({
+  const generation = await generateFactsWithAi({
     provider: testProvider,
-    topic: 'Animals',
+    topic: 'Space',
     language: 'en',
     lengthMode: 'short',
-    count: 1,
+    count: FACT_GENERATION_BATCH_SIZE,
     targetWords: 20,
-    excludedFacts: [excluded],
+    excludedFacts: [],
     fetchImpl: fakeProvider.fetch,
+    logger: quietLogger,
   });
 
-  assert.deepEqual(facts, [fresh]);
-  assert.equal(fakeProvider.requests.length, 2);
-  const retryPrompt = fakeProvider.requests[1].messages[1].content;
-  assert.match(retryPrompt, /A Trio of Cardiac Organs/);
-  assert.match(retryPrompt, /a trio of cardiac organs/);
-  assert.match(retryPrompt, /Novelty attempt: 2/);
+  assert.equal(fakeProvider.requests.length, 1);
+  assert.equal(generation.facts.length, FACT_GENERATION_BATCH_SIZE);
+  assert.equal(generation.facts[0].body, rawFacts[0].content);
+  assert.deepEqual(generation.metrics.usage, {
+    inputTokens: 321,
+    outputTokens: 654,
+    totalTokens: 975,
+  });
+  assert.equal(generation.metrics.providerRequests, 1);
+  assert.match(
+    fakeProvider.requests[0].messages[1].content,
+    /Generate exactly 10 facts in the single facts array/,
+  );
+  assert.equal(fakeProvider.requests[0].max_completion_tokens, 7600);
 });
 
-test('six short generations do not cycle back to the first claim', async () => {
-  const firstFive = [
+test('partial batches are accepted without a refill request', async () => {
+  const fakeProvider = scriptedProvider([
     {
-      key: 'octopus|three hearts',
-      title: 'Octopus Hearts',
-      body: 'Octopuses have three hearts; two pump to the gills.',
+      facts: distinctRawFacts.slice(0, FACT_GENERATION_BATCH_SIZE - 1),
     },
-    {
-      key: 'axolotl|limb regeneration',
-      title: 'Axolotl Regeneration',
-      body: 'Axolotls can regrow limbs, spinal cord tissue, and parts of organs.',
-    },
-    {
-      key: 'mantis shrimp|vision',
-      title: 'Mantis Shrimp Vision',
-      body: 'Mantis shrimp have far more types of color receptors than humans.',
-    },
-    {
-      key: 'wombat|cube droppings',
-      title: 'Wombat Cubes',
-      body: 'Wombat intestines shape their droppings into cubes.',
-    },
-    {
-      key: 'crow|tool use',
-      title: 'Crow Tools',
-      body: 'New Caledonian crows shape twigs into tools for extracting insects.',
-    },
-  ];
-  const repeatedFirst = {
-    key: 'octopus|three cardiac organs',
-    title: 'A Trio of Cardiac Organs',
-    body: 'An octopus has a trio of cardiac organs, including a pair for its gills.',
-  };
-  const sixth = {
-    key: 'sea otter|stone tools',
-    title: 'Sea Otter Tools',
-    body: 'Sea otters use stones as anvils to crack hard-shelled prey.',
-  };
-  const responses = [
-    ...firstFive.map((fact) => [fact]),
-    [repeatedFirst],
-    [sixth],
-  ];
-  const fakeProvider = scriptedProvider(responses);
-  const history = [];
+  ]);
+  const warnings = [];
+  const generation = await generateFactsWithAi({
+    provider: testProvider,
+    topic: 'Flutter & Dart',
+    language: 'en',
+    lengthMode: 'medium',
+    count: FACT_GENERATION_BATCH_SIZE,
+    targetWords: 40,
+    excludedFacts: [],
+    fetchImpl: fakeProvider.fetch,
+    logger: { ...quietLogger, warn: (message) => warnings.push(message) },
+  });
 
-  for (let index = 0; index < 6; index += 1) {
-    const generated = await generateFactsWithAi({
+  assert.equal(fakeProvider.requests.length, 1);
+  assert.equal(generation.facts.length, FACT_GENERATION_BATCH_SIZE - 1);
+  assert.equal(generation.metrics.receivedFacts, FACT_GENERATION_BATCH_SIZE - 1);
+  assert.match(warnings[0], /Expected 10 facts but accepted 9/);
+});
+
+test('invalid and duplicate fact objects are removed without splitting text', async () => {
+  const fakeProvider = scriptedProvider([
+    {
+      facts: [
+        {
+          key: 'sun|star',
+          title: 'The Sun Is a Star',
+          content: 'The Sun is a star at the center of the Solar System.',
+        },
+        {
+          key: 'sun|star',
+          title: 'Our Star',
+          content: 'The Sun is actually a star at the center of our Solar System.',
+        },
+        { title: 42, content: 'Wrong title type.' },
+        { title: 'Missing content' },
+      ],
+    },
+  ]);
+  const generation = await generateFactsWithAi({
+    provider: testProvider,
+    topic: 'Space',
+    language: 'en',
+    lengthMode: 'short',
+    count: 4,
+    targetWords: 20,
+    excludedFacts: [],
+    fetchImpl: fakeProvider.fetch,
+    logger: quietLogger,
+  });
+
+  assert.equal(generation.facts.length, 1);
+  assert.equal(generation.metrics.duplicatesRemoved, 1);
+  assert.equal(generation.metrics.invalidFactsRemoved, 2);
+  assert.equal(fakeProvider.requests.length, 1);
+});
+
+test('JSON parser accepts whitespace, a complete fence, or one trailing period', () => {
+  const parsed = parseAiJsonObject(
+    '  ```json\n{"facts":[{"title":"A","content":"B"}]}\n```  ',
+  );
+  assert.equal(parsed.facts[0].content, 'B');
+  assert.deepEqual(parseAiJsonObject('{"facts":[]}.').facts, []);
+  assert.throws(
+    () => parseAiJsonObject('Explanation: {"facts":[]}'),
+    /not valid JSON/,
+  );
+});
+
+test('malformed provider JSON fails cleanly after one request', async () => {
+  const errors = [];
+  let requests = 0;
+  await assert.rejects(
+    generateFactsWithAi({
       provider: testProvider,
-      topic: 'Animals',
-      language: 'en',
-      lengthMode: 'short',
-      count: 1,
-      targetWords: 20,
-      excludedFacts: history,
-      fetchImpl: fakeProvider.fetch,
-    });
-    history.push(...generated);
-  }
+      topic: 'Қазақ хандығы',
+      language: 'kk',
+      lengthMode: 'detailed',
+      count: FACT_GENERATION_BATCH_SIZE,
+      targetWords: 70,
+      excludedFacts: [],
+      fetchImpl: async () => {
+        requests += 1;
+        return providerResponse('{"facts":[', null);
+      },
+      logger: { ...quietLogger, error: (...values) => errors.push(values) },
+    }),
+    /not valid JSON/,
+  );
 
-  assert.equal(history.length, 6);
-  assert.equal(history.at(-1).title, sixth.title);
-  for (let first = 0; first < history.length; first += 1) {
-    for (let second = first + 1; second < history.length; second += 1) {
-      assert.equal(
-        areFactsSimilar(history[first], history[second]),
-        false,
-        `${history[first].title} repeated as ${history[second].title}`,
-      );
-    }
-  }
+  assert.equal(requests, 1);
+  assert.equal(errors.length, 1);
 });
 
 test('mock generator labels every explicit mock response uniquely', () => {
@@ -322,6 +382,7 @@ test('mock generator labels every explicit mock response uniquely', () => {
 });
 
 test('upstream rate limits stay distinguishable from bad AI content', async () => {
+  let requests = 0;
   await assert.rejects(
     generateFactsWithAi({
       provider: testProvider,
@@ -331,14 +392,50 @@ test('upstream rate limits stay distinguishable from bad AI content', async () =
       count: 1,
       targetWords: 20,
       excludedFacts: [],
-      fetchImpl: async () => new Response(
-        JSON.stringify({ message: 'token quota exceeded' }),
-        { status: 429 },
-      ),
+      fetchImpl: async () => {
+        requests += 1;
+        return new Response(
+          JSON.stringify({ message: 'token quota exceeded' }),
+          { status: 429, headers: { 'Retry-After': '60' } },
+        );
+      },
+      logger: quietLogger,
     }),
     (error) =>
-      error instanceof AiProviderHttpError && error.statusCode === 429,
+      error instanceof AiProviderHttpError &&
+      error.statusCode === 429 &&
+      error.retryAfter === '60',
   );
+  assert.equal(requests, 1);
+});
+
+test('provider payment errors are safe and remain distinguishable', () => {
+  const rawProviderMessage = JSON.stringify({
+    message: 'Payment required to access this resource. Visit billing.',
+    type: 'payment_required_error',
+    code: 'payment_required',
+  });
+  const failure = describeAiProviderFailure(
+    new AiProviderHttpError('cerebras', 402, rawProviderMessage),
+  );
+
+  assert.deepEqual(failure, {
+    statusCode: 402,
+    code: 'provider_payment_required',
+    message: 'AI provider billing or quota is unavailable',
+    retryAfter: null,
+  });
+  assert.doesNotMatch(failure.message, /Visit billing|payment_required_error/);
+});
+
+test('provider authentication details are not exposed to clients', () => {
+  const failure = describeAiProviderFailure(
+    new AiProviderHttpError('cerebras', 401, 'invalid key ending in secret'),
+  );
+
+  assert.equal(failure.statusCode, 502);
+  assert.equal(failure.code, 'provider_authentication_failed');
+  assert.doesNotMatch(failure.message, /secret|invalid key/);
 });
 
 const testProvider = {
@@ -347,7 +444,32 @@ const testProvider = {
   baseUrl: 'https://provider.invalid/v1',
   model: 'test-model',
   supportsJsonMode: true,
+  maxCompletionTokens: 7600,
 };
+
+const quietLogger = {
+  info() {},
+  warn() {},
+  error() {},
+};
+
+const distinctRawFacts = [
+  { key: 'mercury|year', title: 'Mercury Year', content: 'Mercury completes an orbit around the Sun in only 88 Earth days.' },
+  { key: 'venus|rotation', title: 'Venus Rotation', content: 'Venus rotates so slowly that one rotation lasts longer than its orbital year.' },
+  { key: 'earth|tectonics', title: 'Moving Plates', content: 'Earth recycles crust through active plate tectonics and subduction zones.' },
+  { key: 'mars|olympus mons', title: 'Olympus Mons', content: 'Mars hosts Olympus Mons, the tallest known volcano in the Solar System.' },
+  { key: 'jupiter|magnetosphere', title: 'Jupiter Magnetism', content: 'Jupiter has the strongest planetary magnetic field in the Solar System.' },
+  { key: 'saturn|density', title: 'Saturn Density', content: 'Saturn has a lower average density than liquid water.' },
+  { key: 'uranus|axial tilt', title: 'Sideways Uranus', content: 'Uranus spins with an axial tilt of about 98 degrees.' },
+  { key: 'neptune|winds', title: 'Neptune Winds', content: 'Neptune has winds that can exceed two thousand kilometers per hour.' },
+  { key: 'moon|recession', title: 'Receding Moon', content: 'The Moon moves away from Earth by roughly four centimeters each year.' },
+  { key: 'sun|mass', title: 'Solar Mass', content: 'The Sun contains more than 99 percent of the Solar System mass.' },
+  { key: 'black hole|time', title: 'Gravity and Time', content: 'Strong gravity near a black hole makes clocks run slower relative to distant observers.' },
+  { key: 'pulsar|rotation', title: 'Pulsar Clocks', content: 'Some pulsars rotate hundreds of times every second with remarkable regularity.' },
+  { key: 'comet|tail', title: 'Comet Tails', content: 'A comet tail points generally away from the Sun because of radiation and solar wind.' },
+  { key: 'nebula|stars', title: 'Stellar Nurseries', content: 'Dense regions inside nebulae can collapse to form new stars.' },
+  { key: 'exoplanet|transit', title: 'Transit Detection', content: 'Astronomers discover exoplanets by measuring tiny periodic dips in a star brightness.' },
+];
 
 function scriptedProvider(responses) {
   const queue = [...responses];
@@ -356,25 +478,27 @@ function scriptedProvider(responses) {
     requests,
     fetch: async (_url, options) => {
       requests.push(JSON.parse(options.body));
-      const facts = queue.shift();
-      assert.ok(facts, 'The fake provider received an unexpected request');
-      return new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({ facts }),
-              },
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        },
+      const scripted = queue.shift();
+      assert.ok(scripted, 'The fake provider received an unexpected request');
+      return providerResponse(
+        JSON.stringify({ facts: scripted.facts }),
+        scripted.usage,
       );
     },
   };
+}
+
+function providerResponse(content, usage) {
+  return new Response(
+    JSON.stringify({
+      choices: [{ message: { content } }],
+      ...(usage ? { usage } : {}),
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    },
+  );
 }
 
 function postFacts(body) {

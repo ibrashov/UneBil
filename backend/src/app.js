@@ -15,8 +15,9 @@ const maxExcludedFacts = 120;
 const maxExcludedTitleLength = 160;
 const maxExcludedBodyLength = 700;
 const maxExcludedKeyLength = 180;
-const maxGenerationAttempts = 3;
-const providerRequestTimeoutMs = 18000;
+export const FACT_GENERATION_BATCH_SIZE = 10;
+const maxFactGenerationBatchSize = 20;
+const providerRequestTimeoutMs = 60000;
 const languageNames = {
   ru: 'Russian',
   kk: 'Kazakh',
@@ -63,7 +64,7 @@ app.post('/api/generate-facts', async (request, response) => {
   }
 
   try {
-    const facts = await generateFactsWithAi({
+    const generation = await generateFactsWithAi({
       provider: aiProvider,
       topic,
       language,
@@ -72,21 +73,65 @@ app.post('/api/generate-facts', async (request, response) => {
       targetWords: lengthModes[lengthMode],
       excludedFacts,
     });
-    if (facts.length === 0) {
+    if (generation.facts.length === 0) {
       throw new Error('AI provider returned no usable facts');
     }
-    response.json({ facts, source: aiProvider.name });
+    response.json({
+      facts: generation.facts,
+      source: aiProvider.name,
+      generation: generation.metrics,
+    });
   } catch (error) {
-    const rateLimited = error instanceof AiProviderHttpError &&
-      error.statusCode === 429;
-    response.status(rateLimited ? 429 : 502).json({
-      error: rateLimited
-        ? 'AI provider rate limit reached'
-        : 'AI provider failed to generate facts',
-      details: error instanceof Error ? error.message : 'Unknown error',
+    const failure = describeAiProviderFailure(error);
+    if (failure.retryAfter) {
+      response.set('Retry-After', failure.retryAfter);
+    }
+    console.error(
+      '[FactGeneration] Provider request failed:',
+      error instanceof Error ? error.message : error,
+    );
+    response.status(failure.statusCode).json({
+      error: failure.message,
+      code: failure.code,
     });
   }
 });
+
+export function describeAiProviderFailure(error) {
+  if (error instanceof AiProviderHttpError) {
+    if (error.statusCode === 402) {
+      return {
+        statusCode: 402,
+        code: 'provider_payment_required',
+        message: 'AI provider billing or quota is unavailable',
+        retryAfter: null,
+      };
+    }
+    if (error.statusCode === 429) {
+      return {
+        statusCode: 429,
+        code: 'provider_rate_limited',
+        message: 'AI provider rate limit reached',
+        retryAfter: error.retryAfter,
+      };
+    }
+    if (error.statusCode === 401 || error.statusCode === 403) {
+      return {
+        statusCode: 502,
+        code: 'provider_authentication_failed',
+        message: 'AI provider rejected its credentials',
+        retryAfter: null,
+      };
+    }
+  }
+
+  return {
+    statusCode: 502,
+    code: 'provider_generation_failed',
+    message: 'AI provider failed to generate facts',
+    retryAfter: null,
+  };
+}
 
 export function validateGenerateFactsRequest(body) {
   if (!body || typeof body !== 'object') {
@@ -96,7 +141,7 @@ export function validateGenerateFactsRequest(body) {
   const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
   const language = typeof body.language === 'string' ? body.language : '';
   const lengthMode = typeof body.lengthMode === 'string' ? body.lengthMode : '';
-  const count = Number(body.count ?? 1);
+  const count = Number(body.count ?? FACT_GENERATION_BATCH_SIZE);
   const excludedFactsValidation = validateExcludedFacts(body.excludedFacts);
 
   if (topic.length < 2 || topic.length > 80) {
@@ -111,8 +156,13 @@ export function validateGenerateFactsRequest(body) {
       error: 'lengthMode must be one of short, medium, detailed',
     };
   }
-  if (!Number.isInteger(count) || count < 1 || count > 8) {
-    return { ok: false, error: 'count must be an integer from 1 to 8' };
+  if (!Number.isInteger(count) ||
+      count < 1 ||
+      count > maxFactGenerationBatchSize) {
+    return {
+      ok: false,
+      error: `count must be an integer from 1 to ${maxFactGenerationBatchSize}`,
+    };
   }
   if (!excludedFactsValidation.ok) {
     return { ok: false, error: excludedFactsValidation.error };
@@ -278,6 +328,7 @@ function getAiProviderConfig() {
       baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini',
       supportsJsonMode: true,
+      maxCompletionTokens: Number(process.env.OPENAI_MAX_COMPLETION_TOKENS),
     });
   }
 
@@ -300,6 +351,7 @@ function getAiProviderConfig() {
       baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini',
       supportsJsonMode: true,
+      maxCompletionTokens: Number(process.env.OPENAI_MAX_COMPLETION_TOKENS),
     });
   }
 
@@ -313,6 +365,7 @@ function makeProviderConfig({
   baseUrl,
   model,
   supportsJsonMode,
+  maxCompletionTokens,
 }) {
   const trimmedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!trimmedApiKey) {
@@ -327,6 +380,9 @@ function makeProviderConfig({
     baseUrl: baseUrl.replace(/\/+$/, ''),
     model,
     supportsJsonMode,
+    ...(Number.isInteger(maxCompletionTokens) && maxCompletionTokens > 0
+      ? { maxCompletionTokens }
+      : {}),
   };
 }
 
@@ -339,72 +395,76 @@ export async function generateFactsWithAi({
   targetWords,
   excludedFacts,
   fetchImpl = fetch,
-  attempts = maxGenerationAttempts,
+  logger = console,
 }) {
   const languageName = languageNames[language];
+  const startedAt = performance.now();
   const acceptedFacts = [];
-  const rejectedFacts = [];
+  let duplicatesRemoved = 0;
+  const batch = await requestAiBatch({
+    provider,
+    topic,
+    language,
+    languageName,
+    lengthMode,
+    targetWords,
+    count,
+    factsToAvoid: prioritizedAvoidedFacts(excludedFacts),
+    fetchImpl,
+    logger,
+  });
 
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const remainingCount = count - acceptedFacts.length;
-    if (remainingCount <= 0) {
-      break;
+  duplicatesRemoved += batch.duplicatesRemoved;
+  for (const fact of batch.facts) {
+    if (isDuplicateFact(fact, [...excludedFacts, ...acceptedFacts])) {
+      duplicatesRemoved += 1;
+      continue;
     }
-
-    // One spare candidate plus an on-demand retry keeps diversity without
-    // spending most of the provider token quota on discarded alternatives.
-    const candidateCount = Math.min(8, Math.max(2, remainingCount + 1));
-    const factsToAvoid = prioritizedAvoidedFacts(
-      excludedFacts,
-      acceptedFacts,
-      rejectedFacts,
-    );
-    const candidates = await requestAiCandidates({
-      provider,
-      topic,
-      language,
-      languageName,
-      lengthMode,
-      targetWords,
-      candidateCount,
-      factsToAvoid,
-      attempt,
-      fetchImpl,
-    });
-
-    for (const fact of candidates) {
-      if (isDuplicateFact(fact, [
-        ...excludedFacts,
-        ...acceptedFacts,
-      ])) {
-        rejectedFacts.push(fact);
-        continue;
-      }
-      acceptedFacts.push(fact);
-      if (acceptedFacts.length === count) {
-        break;
-      }
-    }
+    acceptedFacts.push(fact);
   }
 
   if (acceptedFacts.length === 0) {
-    throw new Error(`${provider.name} response did not include a new fact after ${attempts} attempts`);
+    throw new Error(`${provider.name} response did not include any usable new facts`);
   }
 
-  return acceptedFacts.slice(0, count);
+  const facts = acceptedFacts.slice(0, count);
+  const durationMs = Math.round(performance.now() - startedAt);
+  const metrics = {
+    requestedFacts: count,
+    receivedFacts: batch.receivedFacts,
+    validFacts: facts.length,
+    invalidFactsRemoved: batch.invalidFactsRemoved,
+    duplicatesRemoved,
+    providerRequests: 1,
+    durationMs,
+    ...(batch.usage ? { usage: batch.usage } : {}),
+  };
+
+  if (facts.length < count) {
+    logger.warn(
+      `[FactGeneration] Expected ${count} facts but accepted ${facts.length}.`,
+    );
+  }
+  logGenerationSummary(logger, {
+    topic,
+    providerName: provider.name,
+    metrics,
+  });
+
+  return { facts, metrics };
 }
 
-async function requestAiCandidates({
+async function requestAiBatch({
   provider,
   topic,
   language,
   languageName,
   lengthMode,
   targetWords,
-  candidateCount,
+  count,
   factsToAvoid,
-  attempt,
   fetchImpl,
+  logger,
 }) {
   const requestBody = {
     model: provider.model,
@@ -413,7 +473,7 @@ async function requestAiCandidates({
       {
         role: 'system',
         content:
-          'You create concise educational facts for phone notifications. Respond only with valid JSON: {"facts":[{"key":"canonical subject|single claim in 2-6 English words","title":"...","body":"..."}]}. Do not wrap it in markdown. The key identifies the underlying claim, not its wording: paraphrases of one claim must have the same key. Do not give generic study advice; each item must contain a concrete fact about the topic. Every returned fact must be new and must not repeat or paraphrase the provided previous facts.',
+          'You create educational facts for phone notifications. Return only one valid JSON object with exactly this shape: {"facts":[{"key":"canonical subject|single claim in 2-6 English words","title":"...","content":"..."}]}. Do not use Markdown fences and do not add text before or after the JSON. The key identifies the underlying claim, not its wording, so paraphrases of one claim must use the same key. Every item must contain a concrete fact about the requested topic.',
       },
       {
         role: 'user',
@@ -421,13 +481,13 @@ async function requestAiCandidates({
           `Topic: ${topic}`,
           `Language: ${languageName} (${language})`,
           `Length mode: ${lengthMode}`,
-          `Target body length: about ${targetWords} words`,
-          `Count: ${candidateCount}`,
-          `Novelty attempt: ${attempt} of ${maxGenerationAttempts}`,
-          'Write every title and body in the requested language only.',
+          `Target content length: about ${targetWords} words`,
+          `Generate exactly ${count} facts in the single facts array.`,
+          'Write every title and content value in the requested language only.',
           'Each fact must be useful, specific, safe, and readable as a phone notification.',
           'Avoid templates like "ask one question", "learn more", or "check the answer"; include the actual fact.',
           'Prefer a less obvious entity or subtopic instead of the most famous fact about a broad topic.',
+          'Make all facts distinct. Do not repeat one idea, claim, example, mechanism, statistic, or entity-property pair with different wording.',
           'Avoid repeating the same claim, idea, example, mechanism, statistic, entity-property pair, or wording from the previous facts.',
           factsToAvoid.length > 0
             ? `Previous and rejected facts to avoid:\n${formatExcludedFactsForPrompt(factsToAvoid)}`
@@ -439,6 +499,9 @@ async function requestAiCandidates({
 
   if (provider.supportsJsonMode) {
     requestBody.response_format = { type: 'json_object' };
+  }
+  if (provider.maxCompletionTokens) {
+    requestBody.max_completion_tokens = provider.maxCompletionTokens;
   }
 
   const response = await fetchImpl(`${provider.baseUrl}/chat/completions`, {
@@ -457,6 +520,7 @@ async function requestAiCandidates({
       provider.name,
       response.status,
       details.slice(0, 300),
+      response.headers.get('retry-after'),
     );
   }
 
@@ -466,16 +530,33 @@ async function requestAiCandidates({
     throw new Error(`${provider.name} response did not include message content`);
   }
 
-  const parsed = parseJsonObject(content);
+  let parsed;
+  try {
+    parsed = parseAiJsonObject(content);
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      logger.error('[FactGeneration] Raw invalid AI response:', content);
+    }
+    throw error;
+  }
   if (!Array.isArray(parsed.facts)) {
     throw new Error(`${provider.name} response JSON did not include facts array`);
   }
 
   const facts = [];
+  let invalidFactsRemoved = 0;
+  let duplicatesRemoved = 0;
   for (const rawFact of parsed.facts) {
-    const title = String(rawFact?.title ?? '').trim();
-    const body = String(rawFact?.body ?? '').trim();
-    const rawKey = String(rawFact?.key ?? '').trim();
+    if (!rawFact || typeof rawFact !== 'object' || Array.isArray(rawFact) ||
+        typeof rawFact.title !== 'string' ||
+        typeof rawFact.content !== 'string' ||
+        (rawFact.key !== undefined && typeof rawFact.key !== 'string')) {
+      invalidFactsRemoved += 1;
+      continue;
+    }
+    const title = rawFact.title.trim();
+    const body = rawFact.content.trim();
+    const rawKey = (rawFact.key ?? '').trim();
     const fact = {
       key: rawKey.slice(0, maxExcludedKeyLength),
       title,
@@ -484,27 +565,31 @@ async function requestAiCandidates({
     if (!fact.title || !fact.body ||
         fact.title.length > maxExcludedTitleLength ||
         fact.body.length > maxExcludedBodyLength) {
+      invalidFactsRemoved += 1;
       continue;
     }
     if (isDuplicateFact(fact, facts)) {
+      duplicatesRemoved += 1;
       continue;
     }
     facts.push(fact);
-    if (facts.length === candidateCount) {
+    if (facts.length === count) {
       break;
     }
   }
 
-  return facts;
+  return {
+    facts,
+    receivedFacts: parsed.facts.length,
+    invalidFactsRemoved,
+    duplicatesRemoved,
+    usage: normalizeUsage(decoded.usage),
+  };
 }
 
-function prioritizedAvoidedFacts(excludedFacts, acceptedFacts, rejectedFacts) {
+function prioritizedAvoidedFacts(excludedFacts) {
   const result = [];
-  for (const fact of [
-    ...rejectedFacts.slice(-12).reverse(),
-    ...acceptedFacts,
-    ...excludedFacts,
-  ]) {
+  for (const fact of excludedFacts) {
     if (!isDuplicateFact(fact, result)) {
       result.push(fact);
     }
@@ -526,25 +611,94 @@ function formatExcludedFactsForPrompt(excludedFacts) {
     .join('\n');
 }
 
-function parseJsonObject(content) {
-  try {
-    return JSON.parse(content);
-  } catch {
-    const start = content.indexOf('{');
-    const end = content.lastIndexOf('}');
-    if (start === -1 || end === -1 || end <= start) {
-      throw new Error('AI response was not valid JSON');
-    }
-
-    return JSON.parse(content.slice(start, end + 1));
+export function parseAiJsonObject(content) {
+  if (typeof content !== 'string') {
+    throw new Error('AI response was not valid JSON');
   }
+
+  let jsonText = content.trim();
+  const fencedMatch = jsonText.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu);
+  if (fencedMatch) {
+    jsonText = fencedMatch[1].trim();
+  }
+
+  const candidateTexts = [jsonText];
+  if (jsonText.endsWith('}.')) {
+    candidateTexts.push(jsonText.slice(0, -1));
+  }
+
+  let parseError;
+  for (const candidateText of candidateTexts) {
+    try {
+      const parsed = JSON.parse(candidateText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('AI response JSON must be an object');
+      }
+      return parsed;
+    } catch (error) {
+      if (error instanceof Error &&
+          error.message === 'AI response JSON must be an object') {
+        throw error;
+      }
+      parseError = error;
+    }
+  }
+
+  throw new Error('AI response was not valid JSON', { cause: parseError });
+}
+
+function normalizeUsage(rawUsage) {
+  if (!rawUsage || typeof rawUsage !== 'object') {
+    return null;
+  }
+  const usage = {};
+  for (const [sourceKey, targetKey] of [
+    ['prompt_tokens', 'inputTokens'],
+    ['completion_tokens', 'outputTokens'],
+    ['total_tokens', 'totalTokens'],
+  ]) {
+    if (Number.isFinite(rawUsage[sourceKey])) {
+      usage[targetKey] = rawUsage[sourceKey];
+    }
+  }
+  return Object.keys(usage).length > 0 ? usage : null;
+}
+
+function logGenerationSummary(logger, { topic, providerName, metrics }) {
+  const usageLines = metrics.usage
+    ? [
+        metrics.usage.inputTokens === undefined
+          ? null
+          : `Input tokens: ${metrics.usage.inputTokens}`,
+        metrics.usage.outputTokens === undefined
+          ? null
+          : `Output tokens: ${metrics.usage.outputTokens}`,
+        metrics.usage.totalTokens === undefined
+          ? null
+          : `Total tokens: ${metrics.usage.totalTokens}`,
+      ].filter(Boolean)
+    : [];
+  logger.info([
+    '[FactGeneration]',
+    `Topic: ${topic}`,
+    `Requested facts: ${metrics.requestedFacts}`,
+    `AI provider: ${providerName}`,
+    `AI provider requests: ${metrics.providerRequests}`,
+    `Generation duration: ${(metrics.durationMs / 1000).toFixed(2)}s`,
+    `Facts received: ${metrics.receivedFacts}`,
+    `Valid facts: ${metrics.validFacts}`,
+    `Invalid facts removed: ${metrics.invalidFactsRemoved}`,
+    `Duplicates removed: ${metrics.duplicatesRemoved}`,
+    ...usageLines,
+  ].join('\n'));
 }
 
 export class AiProviderHttpError extends Error {
-  constructor(providerName, statusCode, details) {
+  constructor(providerName, statusCode, details, retryAfter = null) {
     super(`${providerName} HTTP ${statusCode}: ${details}`);
     this.name = 'AiProviderHttpError';
     this.statusCode = statusCode;
+    this.retryAfter = retryAfter;
   }
 }
 
