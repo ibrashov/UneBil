@@ -139,7 +139,100 @@ void main() {
     );
   });
 
-  test('requests and returns one complete 15-fact backend batch', () async {
+  test('reports provider payment failure without exposing raw JSON', () async {
+    final client = MockClient(
+      (_) async => http.Response(
+        jsonEncode(<String, String>{
+          'error': 'AI provider billing or quota is unavailable',
+          'code': 'provider_payment_required',
+        }),
+        402,
+      ),
+    );
+    final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
+
+    expect(
+      () => aiClient.generateFacts(
+        topic: 'Animals',
+        language: AppLanguage.en,
+        length: NotificationLength.short,
+      ),
+      throwsA(
+        isA<FactGenerationException>().having(
+          (error) => error.message,
+          'message',
+          allOf(contains('оплаченная квота'), isNot(contains('{'))),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'recognizes payment failure from an older backend 502 response',
+    () async {
+      final client = MockClient(
+        (_) async => http.Response(
+          jsonEncode(<String, String>{
+            'error': 'AI provider failed to generate facts',
+            'details': 'cerebras HTTP 402: {"code":"payment_required"}',
+          }),
+          502,
+        ),
+      );
+      final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
+
+      expect(
+        () => aiClient.generateFacts(
+          topic: 'Animals',
+          language: AppLanguage.en,
+          length: NotificationLength.short,
+        ),
+        throwsA(
+          isA<FactGenerationException>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('оплаченная квота'), isNot(contains('HTTP 402'))),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'does not expose backend diagnostic details for generic failures',
+    () async {
+      final client = MockClient(
+        (_) async => http.Response(
+          jsonEncode(<String, String>{
+            'error': 'AI provider failed to generate facts',
+            'details': 'private provider diagnostic',
+          }),
+          502,
+        ),
+      );
+      final aiClient = AiClient(client: client, baseUrl: 'http://backend.test');
+
+      expect(
+        () => aiClient.generateFacts(
+          topic: 'Animals',
+          language: AppLanguage.en,
+          length: NotificationLength.short,
+        ),
+        throwsA(
+          isA<FactGenerationException>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('AI provider failed to generate facts'),
+              isNot(contains('private provider diagnostic')),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  test('requests and returns one complete 10-fact backend batch', () async {
     var httpCalls = 0;
     int? requestedCount;
     final client = MockClient((request) async {
@@ -177,7 +270,7 @@ void main() {
         return http.Response(
           jsonEncode(<String, Object>{
             'source': 'cerebras',
-            'facts': _backendBatch(14),
+            'facts': _backendBatch(factGenerationBatchSize - 1),
           }),
           200,
         );
@@ -192,7 +285,7 @@ void main() {
       );
 
       expect(httpCalls, 1);
-      expect(partial, hasLength(14));
+      expect(partial, hasLength(factGenerationBatchSize - 1));
     },
   );
 }

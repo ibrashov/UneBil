@@ -381,6 +381,13 @@ class AppStrings {
         message,
       );
     }
+    if (message.contains('оплаченная квота')) {
+      return _pick(
+        'AI провайдерінің ақылы квотасы қолжетімсіз. Балансты тексеріңіз немесе басқа AI провайдерін қосыңыз.',
+        'The AI provider has no available paid quota. Check its balance or connect another AI provider.',
+        message,
+      );
+    }
     if (message.contains('mock-режиме')) {
       return _pick(
         'Backend mock режимінде жұмыс істеп тұр: AI кілті жүктелмеген. Backend-ті қайта іске қосып, .env файлын тексеріңіз.',

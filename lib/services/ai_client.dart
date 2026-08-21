@@ -64,7 +64,17 @@ class AiClient implements FactGenerator {
           .timeout(const Duration(seconds: 70));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        final errorCode = _backendErrorCode(response.body);
         final details = _backendErrorDetails(response.body);
+        final paymentRequired =
+            response.statusCode == 402 ||
+            errorCode == 'provider_payment_required' ||
+            response.body.toLowerCase().contains('payment_required');
+        if (paymentRequired) {
+          throw const FactGenerationException(
+            'У AI-провайдера недоступна оплаченная квота. Проверь баланс или подключи другой AI-провайдер.',
+          );
+        }
         if (response.statusCode == 429) {
           throw const FactGenerationException(
             'Достигнут минутный лимит AI. Подожди около минуты и попробуй снова — заглушка вместо факта не будет сохранена.',
@@ -140,11 +150,24 @@ class AiClient implements FactGenerator {
     try {
       final decoded = jsonDecode(body);
       if (decoded is Map<String, dynamic>) {
-        final details = decoded['details'] ?? decoded['error'];
+        final details = decoded['error'];
         return details is String ? details.trim() : '';
       }
     } catch (_) {
       return body.trim();
+    }
+    return '';
+  }
+
+  String _backendErrorCode(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) {
+        final code = decoded['code'];
+        return code is String ? code.trim() : '';
+      }
+    } catch (_) {
+      return '';
     }
     return '';
   }
