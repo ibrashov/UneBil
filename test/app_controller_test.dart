@@ -477,7 +477,9 @@ void main() {
   test(
     'stores every returned batch item as a separate learning fact',
     () async {
-      final batch = _distinctGeneratedBatch();
+      final batch = _distinctGeneratedBatch()
+          .take(factGenerationBatchSize)
+          .toList(growable: false);
       final fakeGenerator = FakeFactGenerator(
         responses: <List<GeneratedFact>>[const <GeneratedFact>[], batch],
       );
@@ -493,8 +495,14 @@ void main() {
       expect(addedCount, factGenerationBatchSize);
       final stored = controller.factsForTopic(topicId);
       expect(stored, hasLength(factGenerationBatchSize));
-      expect(stored.map((fact) => fact.id).toSet(), hasLength(15));
-      expect(stored.map((fact) => fact.title).toSet(), hasLength(15));
+      expect(
+        stored.map((fact) => fact.id).toSet(),
+        hasLength(factGenerationBatchSize),
+      );
+      expect(
+        stored.map((fact) => fact.title).toSet(),
+        hasLength(factGenerationBatchSize),
+      );
     },
   );
 

@@ -2,7 +2,7 @@ import '../models/app_language.dart';
 import '../models/learning_fact.dart';
 import '../models/notification_length.dart';
 
-const int factGenerationBatchSize = 15;
+const int factGenerationBatchSize = 10;
 
 class FactGenerationException implements Exception {
   const FactGenerationException(this.message);
