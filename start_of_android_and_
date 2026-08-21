@@ -1,14 +1,10 @@
-$env:ANDROID_HOME="C:\Users\48F4~1\AppData\Local\Android\Sdk"
-$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
-$env:ANDROID_AVD_HOME="C:\Android\avd"
+# Recommended start command. The script enables GPU rendering, gives Android
+# enough memory, and waits for boot completion before Flutter starts.
+cd "C:\Users\Ануар\Desktop\Папки\Anuar\UneBil App"
+.\scripts\Start-AndroidEmulator.ps1
 
-& "$env:ANDROID_HOME\emulator\emulator.exe" -avd UneBil_API35 -no-snapshot-load
+# Use this only once when an emulator snapshot itself is damaged:
+# .\scripts\Start-AndroidEmulator.ps1 -ColdBoot
 
-
-cd C:\Android\UneBilApp
-
-$env:ANDROID_HOME="C:\Users\48F4~1\AppData\Local\Android\Sdk"
-$env:ANDROID_SDK_ROOT=$env:ANDROID_HOME
-$env:ANDROID_AVD_HOME="C:\Android\avd"
-
-flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:3000
+# Use this only when Android data is damaged. It resets the virtual phone:
+# .\scripts\Start-AndroidEmulator.ps1 -WipeData

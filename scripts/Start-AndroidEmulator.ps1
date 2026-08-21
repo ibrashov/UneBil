@@ -28,6 +28,38 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-FreeDriveLetter {
+    param([string[]]$Excluded = @())
+
+    foreach ($letter in @("U", "V", "W", "T", "S", "R", "Q")) {
+        if ($letter -in $Excluded) {
+            continue
+        }
+        if (-not (Get-PSDrive -Name $letter -ErrorAction SilentlyContinue)) {
+            return $letter
+        }
+    }
+    throw "No free temporary drive letter is available for Flutter."
+}
+
+function Get-AsciiDirectoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ($Path -notmatch '[^\x00-\x7F]') {
+        return $Path
+    }
+    $fileSystem = New-Object -ComObject Scripting.FileSystemObject
+    try {
+        $shortPath = $fileSystem.GetFolder($Path).ShortPath
+    } finally {
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($fileSystem)
+    }
+    if ($shortPath -match '[^\x00-\x7F]') {
+        throw "Windows did not provide an ASCII short path for '$Path'."
+    }
+    return $shortPath
+}
+
 $sdkRoot = if ($env:ANDROID_SDK_ROOT) {
     $env:ANDROID_SDK_ROOT
 } elseif ($env:ANDROID_HOME) {
@@ -108,11 +140,108 @@ if ($bootCompleted -ne "1") {
 
 Write-Host "Android is fully booted on $Serial."
 if ($RunFlutter) {
-    $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-    Push-Location $projectRoot
+    $workingDirectory = (Get-Location).Path
+    $projectRoot = if (Test-Path -LiteralPath (Join-Path $workingDirectory "pubspec.yaml")) {
+        $workingDirectory
+    } else {
+        (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    }
+    $runRoot = $projectRoot
+    $mappedDrives = @()
+    $originalPubCacheExists = Test-Path Env:PUB_CACHE
+    $originalPubCache = $env:PUB_CACHE
+    $pubCacheTarget = if ($originalPubCacheExists) {
+        $originalPubCache
+    } else {
+        Join-Path $env:LOCALAPPDATA "Pub\Cache"
+    }
+    $restorePackageConfig = $false
+    $locationPushed = $false
+
     try {
+        # Android build-tools 36.1 aapt cannot read an APK when any part of
+        # its Windows path contains non-ASCII characters. Run Flutter through
+        # temporary ASCII drive aliases while keeping the repository in place.
+        if ($projectRoot -match '[^\x00-\x7F]') {
+            $projectDriveLetter = Get-FreeDriveLetter
+            $projectDrive = "${projectDriveLetter}:"
+            $projectParent = Split-Path -Parent $projectRoot
+            $projectFolderName = Split-Path -Leaf $projectRoot
+            if ($projectFolderName -match '[^\x00-\x7F]') {
+                throw "The project folder name must contain only ASCII characters."
+            }
+            $projectSubstTarget = Get-AsciiDirectoryPath $projectParent
+            & subst.exe $projectDrive $projectSubstTarget
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not map temporary Flutter drive $projectDrive."
+            }
+            $mappedDrives += $projectDrive
+            # Do not run at a drive root: Flutter 3.44 can emit invalid LSP
+            # JSON for a workspace whose path is exactly U:\ or similar.
+            $runRoot = Join-Path "$projectDrive\" $projectFolderName
+            $restorePackageConfig = $true
+        }
+
+        if ($pubCacheTarget -match '[^\x00-\x7F]') {
+            $excludedLetters = $mappedDrives |
+                ForEach-Object { $_.Substring(0, 1) }
+            $cacheDriveLetter = Get-FreeDriveLetter -Excluded $excludedLetters
+            $cacheDrive = "${cacheDriveLetter}:"
+            $cacheSubstTarget = Get-AsciiDirectoryPath $pubCacheTarget
+            & subst.exe $cacheDrive $cacheSubstTarget
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not map temporary Pub cache drive $cacheDrive."
+            }
+            $mappedDrives += $cacheDrive
+            $env:PUB_CACHE = "$cacheDrive\"
+            $restorePackageConfig = $true
+        }
+
+        Push-Location $runRoot
+        $locationPushed = $true
+
+        if ($restorePackageConfig) {
+            & flutter pub get --offline
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not prepare packages through ASCII paths."
+            }
+        }
+
+        $staleDependencyFile = Join-Path `
+            $runRoot `
+            "build\app\intermediates\flutter\debug\flutter_build.d"
+        if (Test-Path -LiteralPath $staleDependencyFile) {
+            Remove-Item -LiteralPath $staleDependencyFile -Force
+        }
+
         flutter run -d $Serial --dart-define=API_BASE_URL=http://10.0.2.2:3000
     } finally {
-        Pop-Location
+        if ($locationPushed) {
+            Pop-Location
+        }
+
+        if ($originalPubCacheExists) {
+            $env:PUB_CACHE = $originalPubCache
+        } else {
+            Remove-Item Env:PUB_CACHE -ErrorAction SilentlyContinue
+        }
+
+        try {
+            if ($restorePackageConfig) {
+                Push-Location $projectRoot
+                try {
+                    & flutter pub get --offline
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "Could not restore the normal package paths."
+                    }
+                } finally {
+                    Pop-Location
+                }
+            }
+        } finally {
+            foreach ($drive in $mappedDrives) {
+                & subst.exe $drive /D
+            }
+        }
     }
 }
