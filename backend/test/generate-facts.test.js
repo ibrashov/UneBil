@@ -18,6 +18,7 @@ let baseUrl;
 before(async () => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.CEREBRAS_API_KEY;
+  delete process.env.INCEPTION_API_KEY;
   delete process.env.AI_PROVIDER;
   delete process.env.ALLOW_MOCK_FACTS;
   server = app.listen(0);

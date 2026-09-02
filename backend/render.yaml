@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: unebil-backend
+    runtime: node
+    region: frankfurt  # ближе к Казахстану
+    plan: free
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVars:
+      - key: AI_PROVIDER
+        value: inception
+      - key: INCEPTION_MODEL
+        value: mercury-2
+      - key: INCEPTION_API_KEY
+        sync: false  # вручную через dashboard
+      - key: NODE_VERSION
+        value: 20

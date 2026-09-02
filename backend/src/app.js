@@ -303,9 +303,10 @@ function getAiProviderConfig() {
 
   if (requestedProvider &&
       requestedProvider !== 'cerebras' &&
-      requestedProvider !== 'openai') {
+      requestedProvider !== 'openai' &&
+      requestedProvider !== 'inception') {
     return {
-      error: 'AI_PROVIDER must be empty, "cerebras", or "openai"',
+      error: 'AI_PROVIDER must be empty, "cerebras", "openai", or "inception"',
     };
   }
 
@@ -320,6 +321,18 @@ function getAiProviderConfig() {
     });
   }
 
+  if (requestedProvider === 'inception') {
+    return makeProviderConfig({
+      name: 'inception',
+      apiKeyName: 'INCEPTION_API_KEY',
+      apiKey: process.env.INCEPTION_API_KEY,
+      baseUrl: process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1',
+      model: process.env.INCEPTION_MODEL || 'mercury-2',
+      supportsJsonMode: false,
+      reasoningEffort: process.env.INCEPTION_REASONING_EFFORT || 'low',
+    });
+  }
+
   if (requestedProvider === 'openai') {
     return makeProviderConfig({
       name: 'openai',
@@ -329,6 +342,18 @@ function getAiProviderConfig() {
       model: process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini',
       supportsJsonMode: true,
       maxCompletionTokens: Number(process.env.OPENAI_MAX_COMPLETION_TOKENS),
+    });
+  }
+
+  if (process.env.INCEPTION_API_KEY) {
+    return makeProviderConfig({
+      name: 'inception',
+      apiKeyName: 'INCEPTION_API_KEY',
+      apiKey: process.env.INCEPTION_API_KEY,
+      baseUrl: process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1',
+      model: process.env.INCEPTION_MODEL || 'mercury-2',
+      supportsJsonMode: false,
+      reasoningEffort: process.env.INCEPTION_REASONING_EFFORT || 'low',
     });
   }
 
@@ -366,6 +391,7 @@ function makeProviderConfig({
   model,
   supportsJsonMode,
   maxCompletionTokens,
+  reasoningEffort,
 }) {
   const trimmedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   if (!trimmedApiKey) {
@@ -383,6 +409,7 @@ function makeProviderConfig({
     ...(Number.isInteger(maxCompletionTokens) && maxCompletionTokens > 0
       ? { maxCompletionTokens }
       : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }
 
@@ -502,6 +529,9 @@ async function requestAiBatch({
   }
   if (provider.maxCompletionTokens) {
     requestBody.max_completion_tokens = provider.maxCompletionTokens;
+  }
+  if (provider.reasoningEffort) {
+    requestBody.reasoning_effort = provider.reasoningEffort;
   }
 
   const response = await fetchImpl(`${provider.baseUrl}/chat/completions`, {
