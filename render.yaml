@@ -2,7 +2,8 @@ services:
   - type: web
     name: unebil-backend
     runtime: node
-    region: frankfurt  # ближе к Казахстану
+    rootDir: backend
+    region: frankfurt
     plan: free
     buildCommand: npm install
     startCommand: node src/server.js
@@ -12,6 +13,6 @@ services:
       - key: INCEPTION_MODEL
         value: mercury-2
       - key: INCEPTION_API_KEY
-        sync: false  # вручную через dashboard
+        sync: false  # set manually in Render Dashboard
       - key: NODE_VERSION
         value: 20
