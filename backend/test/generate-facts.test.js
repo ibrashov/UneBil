@@ -6,6 +6,7 @@ import app, {
   FACT_GENERATION_BATCH_SIZE,
   describeAiProviderFailure,
   generateFactsWithAi,
+  getAiProviderConfig,
   makeMockFacts,
   parseAiJsonObject,
   validateGenerateFactsRequest,
@@ -74,6 +75,64 @@ test('invalid language is rejected', async () => {
   assert.equal(response.status, 400);
   const body = await response.json();
   assert.match(body.error, /language/);
+});
+
+test('health stays live while readiness reports missing AI configuration', async () => {
+  const health = await fetch(`${baseUrl}/health`);
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { ok: true });
+  const readiness = await fetch(`${baseUrl}/ready`);
+  assert.equal(readiness.status, 503);
+  assert.equal((await readiness.json()).code, 'provider_not_configured');
+});
+
+test('Inception configuration enables JSON mode and readiness never exposes keys', async () => {
+  process.env.AI_PROVIDER = 'inception';
+  process.env.INCEPTION_API_KEY = 'test-secret';
+  try {
+    const provider = getAiProviderConfig();
+    assert.equal(provider.name, 'inception');
+    assert.equal(provider.supportsJsonMode, true);
+    const response = await fetch(`${baseUrl}/ready`);
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(JSON.parse(body).provider, 'inception');
+    assert.doesNotMatch(body, /test-secret|apiKey/);
+  } finally {
+    delete process.env.AI_PROVIDER;
+    delete process.env.INCEPTION_API_KEY;
+  }
+});
+
+test('full Cyrillic exclusion history fits in the HTTP request limit', async () => {
+  const response = await postFacts({
+    topic: 'Космос', language: 'ru', lengthMode: 'detailed', count: 10,
+    excludedFacts: Array.from({ length: 120 }, () => ({
+      title: 'я'.repeat(160), body: 'қ'.repeat(700), key: 'x'.repeat(180),
+    })),
+  });
+  // Configuration fails after successful body parsing and validation, not 413.
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).code, 'provider_not_configured');
+});
+
+test('malformed and oversized JSON return safe JSON errors', async () => {
+  for (const [body, status, code] of [
+    ['{"topic":', 400, 'invalid_json'],
+    [JSON.stringify({ topic: 'x'.repeat(600000) }), 413, 'request_too_large'],
+  ]) {
+    const response = await fetch(`${baseUrl}/api/generate-facts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    assert.equal(response.status, status);
+    assert.equal((await response.json()).code, code);
+  }
+});
+
+test('provider timeouts are distinct from invalid output', () => {
+  const failure = describeAiProviderFailure(new DOMException('Timed out', 'TimeoutError'));
+  assert.equal(failure.statusCode, 504);
+  assert.equal(failure.code, 'provider_timeout');
 });
 
 test('invalid length mode is rejected', async () => {
