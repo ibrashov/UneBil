@@ -367,6 +367,20 @@ class AppStrings {
     if (language == InterfaceLanguage.ru) {
       return message;
     }
+    if (message.contains('должен быть HTTP')) {
+      return _pick(
+        'Backend мекенжайы жарамсыз. HTTP немесе HTTPS мекенжайын көрсетіңіз.',
+        'The backend address is invalid. Use an HTTP or HTTPS address.',
+        message,
+      );
+    }
+    if (message.contains('не ответил вовремя')) {
+      return _pick(
+        'Backend уақытында жауап бермеді. Біраз күтіп, қайта көріңіз.',
+        'The backend did not respond in time. Wait a little and try again.',
+        message,
+      );
+    }
     if (message.contains('API_BASE_URL')) {
       return _pick(
         'API_BASE_URL орнатылмаған. Қолданбаны backend мекенжайымен іске қосыңыз.',
