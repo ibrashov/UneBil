@@ -136,12 +136,29 @@ try {
     $healthResponse = Invoke-WebRequest `
         -UseBasicParsing `
         -Uri $healthUrl `
-        -TimeoutSec 10
+        -TimeoutSec 90
     if ($healthResponse.StatusCode -ne 200) {
         throw "Unexpected health status $($healthResponse.StatusCode)."
     }
+    if (($healthResponse.Content | ConvertFrom-Json).ok -ne $true) {
+        throw "The address did not return UneBil's health response."
+    }
 } catch {
     throw "Backend is not reachable at '$healthUrl'. Start it before building. $($_.Exception.Message)"
+}
+
+# A healthy HTTP server can still have missing credentials or exhausted quota.
+$probeBody = @{ topic = 'Space'; language = 'en'; lengthMode = 'short'; count = 1 } |
+    ConvertTo-Json -Compress
+try {
+    $probe = Invoke-RestMethod -Uri "$ApiBaseUrl/api/generate-facts" `
+        -Method Post -ContentType 'application/json' -Body $probeBody -TimeoutSec 70
+    if ($probe.source -eq 'mock' -or @($probe.facts).Count -eq 0 -or
+        [string]::IsNullOrWhiteSpace($probe.facts[0].body)) {
+        throw 'Backend did not return a real AI fact.'
+    }
+} catch {
+    throw "Backend is reachable, but AI generation failed. Check provider credentials/quota in the server environment. $($_.Exception.Message)"
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputFile)) {
@@ -268,8 +285,11 @@ $artifact = Get-Item -LiteralPath $OutputFile
 $hash = (Get-FileHash -LiteralPath $OutputFile -Algorithm SHA256).Hash
 Write-Host ""
 Write-Host "Phone APK: $($artifact.FullName)"
+Write-Host "Size: $($artifact.Length) bytes; modified: $($artifact.LastWriteTime.ToString('o'))"
 Write-Host "SHA256: $hash"
-Write-Host "Before opening the app, connect the phone to the same Wi-Fi as this computer."
+if ($parsedUrl.Scheme -eq "http") {
+    Write-Host "Before opening the app, connect the phone to the same Wi-Fi as this computer."
+}
 Write-Host "Check from the phone browser: $healthUrl"
 if ($parsedUrl.Scheme -eq "http") {
     Write-Warning "This LAN build will not work over 4G/5G. A public HTTPS backend is required for that."
