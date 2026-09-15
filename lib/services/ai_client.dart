@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -11,14 +12,20 @@ import 'fact_generator.dart';
 class AiClient implements FactGenerator {
   AiClient({
     http.Client? client,
+    this.requestTimeout = const Duration(seconds: 70),
+    this.startupTimeout = const Duration(seconds: 90),
+    this.startupRetryDelay = const Duration(seconds: 2),
     this.baseUrl = const String.fromEnvironment(
       'API_BASE_URL',
-      defaultValue: '',
+      defaultValue: 'https://unebil.onrender.com',
     ),
   }) : _client = client ?? http.Client();
 
   final http.Client _client;
   final String baseUrl;
+  final Duration requestTimeout;
+  final Duration startupTimeout;
+  final Duration startupRetryDelay;
 
   @override
   Future<List<GeneratedFact>> generateFacts({
@@ -35,11 +42,25 @@ class AiClient implements FactGenerator {
       );
     }
 
+    final normalizedBaseUrl = trimmedBaseUrl.replaceAll(RegExp(r'/+$'), '');
+    final backendUri = Uri.tryParse(normalizedBaseUrl);
+    if (backendUri == null ||
+        !['http', 'https'].contains(backendUri.scheme) ||
+        backendUri.host.isEmpty ||
+        backendUri.userInfo.isNotEmpty ||
+        backendUri.hasQuery ||
+        backendUri.hasFragment) {
+      throw const FactGenerationException(
+        'API_BASE_URL должен быть HTTP или HTTPS адресом backend.',
+      );
+    }
+
     try {
       final requestExclusions = excludedFacts.take(120).toList(growable: false);
-      final uri = Uri.parse(
-        '${trimmedBaseUrl.replaceAll(RegExp(r'/$'), '')}/api/generate-facts',
-      );
+      if (backendUri.host.endsWith('.onrender.com')) {
+        await _waitForRender('$normalizedBaseUrl/health');
+      }
+      final uri = Uri.parse('$normalizedBaseUrl/api/generate-facts');
       final response = await _client
           .post(
             uri,
@@ -61,7 +82,7 @@ class AiClient implements FactGenerator {
                     .toList(),
             }),
           )
-          .timeout(const Duration(seconds: 70));
+          .timeout(requestTimeout);
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final errorCode = _backendErrorCode(response.body);
@@ -87,7 +108,7 @@ class AiClient implements FactGenerator {
         );
       }
 
-      final decoded = jsonDecode(response.body);
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
       if (decoded is! Map<String, dynamic>) {
         throw const FactGenerationException(
           'Backend вернул ответ не в формате JSON-объекта.',
@@ -139,11 +160,47 @@ class AiClient implements FactGenerator {
       return usableFacts.take(count).toList(growable: false);
     } on FactGenerationException {
       rethrow;
+    } on TimeoutException {
+      throw const FactGenerationException(
+        'Backend не ответил вовремя. Подожди немного и попробуй снова.',
+      );
+    } on FormatException {
+      throw const FactGenerationException(
+        'Backend вернул ответ не в формате JSON-объекта. Проверь адрес API.',
+      );
     } catch (_) {
       throw const FactGenerationException(
         'Backend недоступен. Запусти backend или проверь адрес API.',
       );
     }
+  }
+
+  Future<void> _waitForRender(String healthUrl) async {
+    final timer = Stopwatch()..start();
+    while (timer.elapsed < startupTimeout) {
+      final remaining = startupTimeout - timer.elapsed;
+      final response = await _client
+          .get(Uri.parse(healthUrl))
+          .timeout(remaining);
+      if (response.statusCode == 200) {
+        try {
+          final body = jsonDecode(response.body);
+          if (body is Map && body['ok'] == true) return;
+        } on FormatException {
+          // Render may return its HTML loading page while the service wakes.
+        }
+      } else if (![502, 503, 504].contains(response.statusCode)) {
+        throw FactGenerationException(
+          'Backend вернул ошибку ${response.statusCode} при проверке /health. Проверь адрес API.',
+        );
+      }
+      final timeLeft = startupTimeout - timer.elapsed;
+      if (timeLeft <= Duration.zero) break;
+      await Future<void>.delayed(
+        startupRetryDelay < timeLeft ? startupRetryDelay : timeLeft,
+      );
+    }
+    throw TimeoutException('Render startup timed out');
   }
 
   String _backendErrorDetails(String body) {
@@ -154,7 +211,7 @@ class AiClient implements FactGenerator {
         return details is String ? details.trim() : '';
       }
     } catch (_) {
-      return body.trim();
+      return '';
     }
     return '';
   }
