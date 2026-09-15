@@ -26,10 +26,28 @@ const languageNames = {
 
 const app = express();
 
-app.use(express.json({ limit: '128kb' }));
+// 120 Cyrillic/Kazakh exclusion entries can exceed 128 KB in UTF-8.
+app.use(express.json({ limit: '512kb' }));
+
+app.get('/', (_request, response) => {
+  response.json({ service: 'UneBil backend', health: '/health', readiness: '/ready' });
+});
 
 app.get('/health', (_request, response) => {
   response.json({ ok: true });
+});
+
+app.get('/ready', (_request, response) => {
+  const provider = getAiProviderConfig();
+  if (!provider || provider.error) {
+    return response.status(503).json({
+      ok: false,
+      code: 'provider_not_configured',
+      error: provider?.error || 'AI provider is not configured',
+    });
+  }
+  // Configuration check only. Use check:ai to verify credentials and quota.
+  response.json({ ok: true, provider: provider.name, model: provider.model });
 });
 
 app.post('/api/generate-facts', async (request, response) => {
@@ -42,13 +60,14 @@ app.post('/api/generate-facts', async (request, response) => {
 
   const aiProvider = getAiProviderConfig();
   if (aiProvider?.error) {
-    return response.status(503).json({ error: aiProvider.error });
+    return response.status(503).json({ error: aiProvider.error, code: 'provider_not_configured' });
   }
 
   if (!aiProvider) {
     if (!mockFactsEnabled()) {
       return response.status(503).json({
         error: 'AI provider is not configured',
+        code: 'provider_not_configured',
       });
     }
     return response.json({
@@ -98,6 +117,14 @@ app.post('/api/generate-facts', async (request, response) => {
 });
 
 export function describeAiProviderFailure(error) {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+    return {
+      statusCode: 504,
+      code: 'provider_timeout',
+      message: 'AI provider timed out while generating facts',
+      retryAfter: null,
+    };
+  }
   if (error instanceof AiProviderHttpError) {
     if (error.statusCode === 402) {
       return {
@@ -298,7 +325,7 @@ function mockFactsEnabled() {
   );
 }
 
-function getAiProviderConfig() {
+export function getAiProviderConfig() {
   const requestedProvider = (process.env.AI_PROVIDER || '').trim().toLowerCase();
 
   if (requestedProvider &&
@@ -328,7 +355,7 @@ function getAiProviderConfig() {
       apiKey: process.env.INCEPTION_API_KEY,
       baseUrl: process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1',
       model: process.env.INCEPTION_MODEL || 'mercury-2',
-      supportsJsonMode: false,
+      supportsJsonMode: true,
       reasoningEffort: process.env.INCEPTION_REASONING_EFFORT || 'low',
     });
   }
@@ -352,7 +379,7 @@ function getAiProviderConfig() {
       apiKey: process.env.INCEPTION_API_KEY,
       baseUrl: process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1',
       model: process.env.INCEPTION_MODEL || 'mercury-2',
-      supportsJsonMode: false,
+      supportsJsonMode: true,
       reasoningEffort: process.env.INCEPTION_REASONING_EFFORT || 'low',
     });
   }
@@ -403,8 +430,8 @@ function makeProviderConfig({
   return {
     name,
     apiKey: trimmedApiKey,
-    baseUrl: baseUrl.replace(/\/+$/, ''),
-    model,
+    baseUrl: baseUrl.trim().replace(/\/+$/, ''),
+    model: model.trim(),
     supportsJsonMode,
     ...(Number.isInteger(maxCompletionTokens) && maxCompletionTokens > 0
       ? { maxCompletionTokens }
@@ -511,7 +538,7 @@ async function requestAiBatch({
           `Target content length: about ${targetWords} words`,
           `Generate exactly ${count} facts in the single facts array.`,
           'Write every title and content value in the requested language only.',
-          'Each fact must be useful, specific, safe, and readable as a phone notification.',
+          'Each fact must be useful, specific, safe, and readable as a phone notification. Titles must be at most 160 characters and content at most 700 characters.',
           'Avoid templates like "ask one question", "learn more", or "check the answer"; include the actual fact.',
           'Prefer a less obvious entity or subtopic instead of the most famous fact about a broad topic.',
           'Make all facts distinct. Do not repeat one idea, claim, example, mechanism, statistic, or entity-property pair with different wording.',
@@ -731,5 +758,16 @@ export class AiProviderHttpError extends Error {
     this.retryAfter = retryAfter;
   }
 }
+
+app.use((error, _request, response, _next) => {
+  if (error.type === 'entity.too.large') {
+    return response.status(413).json({ error: 'Request body is too large', code: 'request_too_large' });
+  }
+  if (error.type === 'entity.parse.failed') {
+    return response.status(400).json({ error: 'Request body must be valid JSON', code: 'invalid_json' });
+  }
+  console.error('[Backend] Request failed:', error.name);
+  response.status(500).json({ error: 'Internal server error' });
+});
 
 export default app;
