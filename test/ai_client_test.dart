@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,147 @@ import 'package:unebil/services/ai_client.dart';
 import 'package:unebil/services/fact_generator.dart';
 
 void main() {
+  test(
+    'waits for Render startup before sending exactly one generation POST',
+    () async {
+      var healthCalls = 0;
+      var generationCalls = 0;
+      final client = MockClient((request) async {
+        if (request.method == 'GET') {
+          expect(request.url.path, '/health');
+          healthCalls++;
+          if (healthCalls == 1) {
+            return http.Response('<html>Starting</html>', 200);
+          }
+          if (healthCalls == 2) return http.Response('Unavailable', 503);
+          return http.Response('{"ok":true}', 200);
+        }
+        generationCalls++;
+        expect(healthCalls, 3);
+        expect(request.url.path, '/api/generate-facts');
+        return http.Response(
+          jsonEncode({'source': 'inception', 'facts': _backendBatch(1)}),
+          200,
+        );
+      });
+      final ai = AiClient(
+        client: client,
+        baseUrl: 'https://example.onrender.com///',
+        startupRetryDelay: Duration.zero,
+      );
+      final facts = await ai.generateFacts(
+        topic: 'Space',
+        language: AppLanguage.en,
+        length: NotificationLength.short,
+      );
+      expect(facts, hasLength(1));
+      expect(generationCalls, 1);
+    },
+  );
+
+  test('a startup timeout never sends a generation POST', () async {
+    var generationCalls = 0;
+    final client = MockClient((request) async {
+      if (request.method == 'POST') generationCalls++;
+      throw TimeoutException('startup');
+    });
+    final ai = AiClient(
+      client: client,
+      baseUrl: 'https://example.onrender.com',
+    );
+    await expectLater(
+      ai.generateFacts(
+        topic: 'Space',
+        language: AppLanguage.en,
+        length: NotificationLength.short,
+      ),
+      throwsA(
+        isA<FactGenerationException>().having(
+          (error) => error.message,
+          'message',
+          contains('не ответил вовремя'),
+        ),
+      ),
+    );
+    expect(generationCalls, 0);
+  });
+
+  test('decodes Cyrillic facts as UTF-8 without a response charset', () async {
+    final client = MockClient(
+      (_) async => http.Response.bytes(
+        utf8.encode(
+          jsonEncode({
+            'source': 'inception',
+            'facts': [
+              {'title': 'Ғарыш', 'body': 'Ай Жерді айналады.'},
+            ],
+          }),
+        ),
+        200,
+      ),
+    );
+    final ai = AiClient(client: client, baseUrl: 'https://backend.test');
+    final facts = await ai.generateFacts(
+      topic: 'Space',
+      language: AppLanguage.kk,
+      length: NotificationLength.short,
+    );
+    expect(facts.single.title, 'Ғарыш');
+    expect(facts.single.body, 'Ай Жерді айналады.');
+  });
+
+  test(
+    'HTML errors do not expose a proxy page or claim a network failure',
+    () async {
+      final client = MockClient(
+        (_) async =>
+            http.Response('<html>private proxy diagnostic</html>', 502),
+      );
+      final ai = AiClient(client: client, baseUrl: 'https://backend.test');
+      await expectLater(
+        ai.generateFacts(
+          topic: 'Space',
+          language: AppLanguage.en,
+          length: NotificationLength.short,
+        ),
+        throwsA(
+          isA<FactGenerationException>().having(
+            (error) => error.message,
+            'message',
+            allOf(contains('502'), isNot(contains('<html>'))),
+          ),
+        ),
+      );
+    },
+  );
+
+  test('invalid backend URLs fail before sending a request', () async {
+    final client = MockClient(
+      (_) async => throw StateError('Unexpected request'),
+    );
+    for (final url in [
+      'backend.test',
+      'ftp://backend.test',
+      'https://backend.test?x=1',
+    ]) {
+      final ai = AiClient(client: client, baseUrl: url);
+      await expectLater(
+        ai.generateFacts(
+          topic: 'Space',
+          language: AppLanguage.en,
+          length: NotificationLength.short,
+        ),
+        throwsA(
+          isA<FactGenerationException>().having(
+            (error) => error.message,
+            'message',
+            contains('HTTP'),
+          ),
+        ),
+      );
+    }
+  });
+
   test('fails clearly when API_BASE_URL is not configured', () async {
     var requestSent = false;
     final client = MockClient((_) async {
