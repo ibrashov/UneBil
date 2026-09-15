@@ -26,6 +26,9 @@ Install Flutter dependencies:
 flutter pub get
 ```
 
+The app defaults to the public backend `https://unebil.onrender.com`.
+Use `--dart-define=API_BASE_URL=...` to override it for local development.
+
 Run on an Android emulator with the local backend:
 
 ```sh
@@ -81,24 +84,30 @@ npm install
 npm start
 ```
 
+Use Node.js 24 LTS (minimum 22.16). `npm start` and
+`node backend/src/server.js` both load `backend/.env` regardless of the working
+directory. Environment variables already set by the host take precedence.
+
 Without an AI API key, the backend returns `503` and the app shows an error. It never
 saves a placeholder as a learning fact. For an isolated backend test only, mock
 responses can be enabled explicitly with `ALLOW_MOCK_FACTS=true`; the Flutter app
 still rejects responses marked as `source: mock`.
 
-To use Cerebras AI generation, create `backend/.env` based on `backend/.env.example`:
+To use Inception generation, create `backend/.env` based on `backend/.env.example`:
 
 ```sh
-AI_PROVIDER=cerebras
-CEREBRAS_API_KEY=your_key_here
-CEREBRAS_MODEL=gemma-4-31b
+AI_PROVIDER=inception
+INCEPTION_API_KEY=your_key_here
+INCEPTION_MODEL=mercury-2
 npm start
 ```
 
 Restart the backend after changing `.env` or files under `backend/src`, because
 `npm start` does not use watch mode. Use `npm run dev` while editing the backend.
 
-OpenAI-compatible generation is still available with `AI_PROVIDER=openai` and `OPENAI_API_KEY`.
+Cerebras and OpenAI-compatible generation remain available through the settings
+in `.env.example`. HTTP 402 means the selected provider has no usable billing/quota;
+restarting cannot fix that. Configure another funded/available provider instead.
 
 Run backend tests:
 
@@ -106,3 +115,48 @@ Run backend tests:
 cd backend
 npm test
 ```
+
+### Verify the actual AI connection
+
+`/health` checks the HTTP server. `/ready` checks provider configuration without
+calling the AI; it does **not** prove that credentials or quota are valid.
+This command makes a real 10-fact request and exits with a failure if generation fails:
+
+```powershell
+cd backend
+npm run check:ai -- --local
+# Test a running deployment instead:
+npm run check:ai -- https://unebil.onrender.com
+# Optional: test English, Russian and Kazakh (three provider requests):
+npm run check:ai -- --local --all-languages
+```
+
+### Render deployment
+
+Deploy `render.yaml` as a Blueprint, or use these Web Service settings:
+
+- Root directory: `backend`
+- Build: `npm ci`; start: `npm start`; Node: `24`
+- Health check: `/health`
+- Environment: `AI_PROVIDER=inception`, `INCEPTION_MODEL=mercury-2`, and your
+  `INCEPTION_API_KEY`. The local `.env` is ignored by Git and is **not uploaded**.
+
+Use the public HTTPS service URL without `:3000`, `:10000`, `/health`, or `/api`.
+The backend already binds to `0.0.0.0` and Render's `PORT`.
+Render's free service sleeps after 15 idle minutes and can take about a minute
+to start ([Render documentation](https://render.com/docs/free)). The Android
+client waits for `/health` on `*.onrender.com` for up to 90 seconds before its
+separate 70-second generation request. It does not automatically retry generation.
+
+After deploying, build the phone app with the actual address:
+
+```powershell
+.\scripts\Build-PhoneApk.ps1 -ApiBaseUrl https://unebil.onrender.com
+```
+
+The script checks health and generates one real fact before building. A plain
+`flutter build apk` uses `https://unebil.onrender.com` by default.
+For a working local Wi-Fi alternative, keep `npm start` running and execute
+`.\scripts\Build-PhoneApk.ps1` without an address.
+
+See [ISSUES.md](ISSUES.md) for the investigated failures and remaining limitations.
