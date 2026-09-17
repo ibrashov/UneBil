@@ -71,7 +71,7 @@ flutter test
 Собрать debug APK:
 
 ```sh
-flutter build apk --debug
+flutter build apk --debug --dart-define=API_BASE_URL=http://10.0.2.2:3000
 ```
 
 APK появится здесь:
@@ -178,7 +178,7 @@ lib/services/ai_client.dart
 Ищи:
 
 ```dart
-defaultValue: 'http://10.0.2.2:3000'
+defaultValue: 'https://unebil.onrender.com'
 ```
 
 Но лучше не менять код, а запускать так:
@@ -189,15 +189,10 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
 
 Для физического телефона вместо `10.0.2.2` нужно поставить IP твоего компьютера в Wi-Fi сети.
 
-### Изменить текст mock-фактов
+### Изменить текст mock-фактов для backend-тестов
 
-Flutter fallback:
-
-```txt
-lib/services/ai_client.dart
-```
-
-Backend mock:
+Приложение не сохраняет mock-факты. Только backend-тесты могут включить
+`ALLOW_MOCK_FACTS=true`:
 
 ```txt
 backend/src/app.js
@@ -206,7 +201,6 @@ backend/src/app.js
 Ищи функции:
 
 ```txt
-_mockFacts
 makeMockFacts
 ```
 
@@ -221,7 +215,7 @@ backend/src/app.js
 Ищи функцию:
 
 ```txt
-generateFactsWithOpenAI
+requestAiBatch
 ```
 
 Там есть `system` и `user` messages. Это инструкция для ИИ.
@@ -530,7 +524,7 @@ Backend URL берется отсюда:
 ```dart
 const String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://10.0.2.2:3000',
+  defaultValue: 'https://unebil.onrender.com',
 )
 ```
 
@@ -553,9 +547,10 @@ generateFacts(...)
 }
 ```
 
-Если backend не отвечает, приложение не ломается. Оно возвращает fallback mock-факты из `_mockFacts`.
-
-Это сделано, чтобы приложение можно было тестировать даже без интернета или backend.
+По умолчанию используется `https://unebil.onrender.com`. Другой адрес можно
+передать через `--dart-define=API_BASE_URL=...`. Если backend не отвечает,
+приложение показывает ошибку и сохраняет
+уже загруженные факты. Заглушки вместо реальных фактов не создаются.
 
 ### `lib/services/notification_scheduler.dart`
 
@@ -773,9 +768,9 @@ Express нужен для HTTP API.
 Пример переменных окружения:
 
 ```txt
-PORT=3000
-OPENAI_API_KEY=
-AI_MODEL=gpt-4.1-mini
+AI_PROVIDER=inception
+INCEPTION_API_KEY=your_key_here
+INCEPTION_MODEL=mercury-2
 ```
 
 Чтобы подключить настоящий ИИ:
@@ -793,16 +788,20 @@ AI_MODEL=gpt-4.1-mini
 Код:
 
 ```js
+import './env.js';
 import app from './app.js';
 
 const port = Number(process.env.PORT || 3000);
 
-app.listen(port, () => {
-  console.log(`UneBil backend listening on http://localhost:${port}`);
+const host = process.env.HOST || '0.0.0.0';
+app.listen(port, host, () => {
+  console.log(`UneBil backend listening on http://${host}:${port}`);
 });
 ```
 
-Простыми словами: берет Express app из `app.js` и запускает сервер на порту `3000`.
+Загружает `backend/.env`, берет Express app из `app.js` и слушает `PORT`
+(локально `3000`, на Render порт задаётся платформой). Подробности провайдера
+печатаются при запуске без секретного ключа. Требуется Node 22.16+; рекомендуется 24.
 
 ### `backend/src/app.js`
 
@@ -825,8 +824,8 @@ app.post('/api/generate-facts', ...)
 Он делает:
 
 1. проверяет request body;
-2. если нет `OPENAI_API_KEY`, возвращает mock-факты;
-3. если ключ есть, отправляет запрос в OpenAI API;
+2. проверяет настройки выбранного провайдера; без ключа возвращает `503`;
+3. отправляет запрос в Inception, Cerebras или OpenAI-совместимый API;
 4. возвращает JSON с массивом `facts`.
 
 Функция:
@@ -840,7 +839,7 @@ validateGenerateFactsRequest(body)
 - `topic` от 2 до 80 символов;
 - `language` только `ru`, `kk`, `en`;
 - `lengthMode` только `short`, `medium`, `detailed`;
-- `count` от 1 до 8.
+- `count` от 1 до 20 (по умолчанию 10).
 
 Функция:
 
@@ -853,12 +852,12 @@ makeMockFacts(...)
 Функция:
 
 ```js
-generateFactsWithOpenAI(...)
+generateFactsWithAi(...)
 ```
 
-Отправляет запрос в OpenAI Chat Completions API.
-
-Если хочешь поменять стиль ответа ИИ, редактируй `messages` внутри этой функции.
+Отправляет один запрос в API выбранного провайдера. Чтобы поменять стиль ответа,
+редактируй `messages` внутри `requestAiBatch`. Невалидные и повторяющиеся факты
+отбрасываются; неполная партия допустима и не вызывает повторных платных запросов.
 
 ### `backend/test/generate-facts.test.js`
 
@@ -866,7 +865,7 @@ generateFactsWithOpenAI(...)
 
 Проверяют:
 
-- валидный запрос возвращает mock-факты без API-ключа;
+- без API-ключа возвращается `503`; mock включается только явным тестовым флагом;
 - неправильный язык возвращает `400`;
 - неправильная длина возвращает `400`.
 

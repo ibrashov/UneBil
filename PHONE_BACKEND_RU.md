@@ -39,11 +39,27 @@ APK нужно пересобрать этим же скриптом.
 
 ## Работа через 4G/5G и любой Wi-Fi
 
+Для Render используй `render.yaml`: корень `backend`, сборка `npm ci`, запуск
+`npm start`, Node 24, проверка `/health`. В Environment укажи
+`AI_PROVIDER=inception`, `INCEPTION_MODEL=mercury-2` и `INCEPTION_API_KEY`.
+Локальный `backend/.env` не попадает на Render. `/ready` показывает, настроен ли
+провайдер; реальную генерацию проверяет команда:
+
+```powershell
+cd backend
+npm run check:ai -- https://unebil.onrender.com
+```
+
+Бесплатный Render засыпает после 15 минут простоя. Приложение сначала ждёт
+`/health` до 90 секунд, затем отдельно ждёт генерацию до 70 секунд. В адресе
+для APK не должно быть порта `3000`/`10000` или окончания `/health`/`api`.
+Ошибка 402 относится к балансу/квоте AI, а не к соединению с Render.
+
 Для этого backend нужно разместить на постоянно работающем публичном сервере с
 HTTPS. После развёртывания APK собирается так:
 
 ```powershell
-.\scripts\Build-PhoneApk.ps1 -ApiBaseUrl https://your-backend.example.com
+.\scripts\Build-PhoneApk.ps1 -ApiBaseUrl https://unebil.onrender.com
 ```
 
 AI-ключ хранится только в переменных окружения сервера. Его нельзя добавлять во

@@ -5,8 +5,9 @@ services:
     rootDir: backend
     region: frankfurt
     plan: free
-    buildCommand: npm install
-    startCommand: node src/server.js
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: AI_PROVIDER
         value: inception
@@ -15,4 +16,4 @@ services:
       - key: INCEPTION_API_KEY
         sync: false  # set manually in Render Dashboard
       - key: NODE_VERSION
-        value: 20
+        value: 24

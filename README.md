@@ -1,6 +1,6 @@
 # UneBil
 
-UneBil is an Android-first Flutter MVP that turns phone time into small learning moments.
+UneBil is a Flutter app for Android and iOS that turns phone time into small learning moments.
 Users add topics they are curious about, choose the language and notification length, select a per-topic notification interval, and receive short learning facts as local notifications.
 
 For a detailed Russian explanation of every important file, read:
@@ -67,6 +67,35 @@ The debug APK is created at:
 ```txt
 build/app/outputs/flutter-apk/app-debug.apk
 ```
+
+## iPhone and App Store
+
+The iOS project is in `ios/`. Building and signing an iPhone application
+requires macOS, Xcode, and an Apple Developer account; it cannot be completed
+on Windows.
+
+On a Mac, install the current stable Flutter and Xcode, then run:
+
+```sh
+flutter pub get
+dart run flutter_launcher_icons
+open ios/Runner.xcworkspace
+```
+
+In Xcode, select the `Runner` target, choose your Apple development team, and
+confirm that the bundle identifier `com.ibrashov.unebil` is available in your
+account. Test notifications and fact generation on a physical iPhone before
+uploading the first build to TestFlight.
+
+Create the App Store archive with:
+
+```sh
+flutter build ipa --release \
+  --dart-define=API_BASE_URL=https://unebil.onrender.com
+```
+
+The IPA is written to `build/ios/ipa/`. Detailed Russian instructions and the
+App Store checklist are in [`IOS_RELEASE_RU.md`](IOS_RELEASE_RU.md).
 
 ## Backend
 
