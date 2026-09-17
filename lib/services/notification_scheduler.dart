@@ -324,6 +324,11 @@ class NotificationScheduler implements FactNotificationScheduler {
 
     const settings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: IOSInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
     );
     await _plugin.initialize(
       settings: settings,
@@ -434,7 +439,7 @@ class NotificationScheduler implements FactNotificationScheduler {
 
     if (!await _ensureNotificationsAllowed(requestPermission: false)) {
       throw const NotificationPermissionException(
-        'Уведомления запрещены для UneBil. Разреши их в настройках Android.',
+        'Уведомления запрещены для UneBil. Разреши их в настройках телефона.',
       );
     }
 
@@ -497,24 +502,43 @@ class NotificationScheduler implements FactNotificationScheduler {
     required bool requestPermission,
   }) async {
     final android = _androidPlugin;
-    if (android == null) {
-      return true;
-    }
-
-    if (requestPermission) {
+    if (android != null && requestPermission) {
       final granted = await android.requestNotificationsPermission();
       if (granted == false) {
         return false;
       }
     }
+    if (android != null) {
+      return await android.areNotificationsEnabled() ?? true;
+    }
 
-    return await android.areNotificationsEnabled() ?? true;
+    final ios = _iosPlugin;
+    if (ios != null && requestPermission) {
+      return await ios.requestPermissions(
+            alert: true,
+            badge: true,
+            sound: true,
+          ) ??
+          false;
+    }
+    if (ios != null) {
+      return (await ios.checkPermissions())?.isEnabled ?? true;
+    }
+
+    return true;
   }
 
   AndroidFlutterLocalNotificationsPlugin? get _androidPlugin {
     return _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
+        >();
+  }
+
+  IOSFlutterLocalNotificationsPlugin? get _iosPlugin {
+    return _plugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
         >();
   }
 
@@ -554,6 +578,12 @@ class NotificationScheduler implements FactNotificationScheduler {
       importance: Importance.high,
       priority: Priority.high,
       styleInformation: BigTextStyleInformation(body),
+    ),
+    iOS: const DarwinNotificationDetails(
+      presentAlert: true,
+      presentBanner: true,
+      presentList: true,
+      presentSound: true,
     ),
   );
 
